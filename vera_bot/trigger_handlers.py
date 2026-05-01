@@ -66,6 +66,61 @@ def _money(value: Any) -> str:
     return f"Rs {value}"
 
 
+def _payload_facts(payload: dict[str, Any], limit: int = 2) -> list[str]:
+    facts: list[str] = []
+    skip = {"category", "merchant_id", "customer_id"}
+    for key, value in payload.items():
+        if key in skip or value in (None, "", [], {}):
+            continue
+        label = _humanize(key)
+        if isinstance(value, bool):
+            rendered = "yes" if value else "no"
+        elif isinstance(value, (int, float)):
+            rendered = _pct(value) if "pct" in key or "delta" in key else str(value)
+        elif isinstance(value, str):
+            rendered = _humanize(value).split("T")[0]
+        elif isinstance(value, list):
+            bits = []
+            for item in value[:2]:
+                if isinstance(item, dict):
+                    bits.append(str(item.get("label") or item.get("title") or item.get("name") or ""))
+                else:
+                    bits.append(_humanize(item))
+            rendered = ", ".join(bit for bit in bits if bit)
+        else:
+            continue
+        if rendered:
+            facts.append(f"{label} {rendered}")
+        if len(facts) >= limit:
+            break
+    return facts
+
+
+def _top_review_theme(merchant: dict[str, Any]) -> str:
+    themes = merchant.get("review_themes", [])
+    if not themes:
+        return ""
+    theme = themes[0]
+    name = _humanize(theme.get("theme", ""))
+    count = theme.get("occurrences_30d")
+    if name and count:
+        return f"{name} from {count} reviews"
+    return name
+
+
+def _merchant_anchor(merchant: dict[str, Any], offer: str = "") -> str:
+    parts: list[str] = []
+    location = _city_locality(merchant)
+    if location != "your area":
+        parts.append(location)
+    perf = merchant.get("performance", {})
+    if perf.get("views") is not None and perf.get("calls") is not None:
+        parts.append(f"{perf.get('views')} views/{perf.get('calls')} calls")
+    if offer:
+        parts.append(offer)
+    return "; ".join(parts[:3])
+
+
 def _find_digest(category: dict[str, Any], trigger: dict[str, Any]) -> dict[str, Any]:
     payload = trigger.get("payload", {})
     wanted = (
@@ -436,9 +491,12 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
         return _result(body, "binary_yes_no", "vera", suppression, "Competitor trigger uses distance/offer and recommends positioning rather than blind discounting.")
 
     if kind == "curious_ask_due":
+        theme = _top_review_theme(merchant)
+        signal = _humanize(merchant.get("signals", [""])[0] if merchant.get("signals") else "")
+        clue = theme or signal or "this week's customer demand"
         body = (
-            f"{name}, quick check: what service is most asked-for this week at {_merchant_short_name(merchant)}? "
-            "I will turn your answer into a Google post + 4-line WhatsApp reply. Takes 5 min."
+            f"{name}, quick check: is {clue} still the strongest demand at {_merchant_short_name(merchant)}? "
+            "Reply with one service name; I will turn it into a Google post + 4-line WhatsApp reply."
         )
         return _result(body, "open_ended", "vera", suppression, "Curious-ask trigger invites merchant input and offers to convert it into useful copy.")
 
@@ -512,10 +570,17 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
         return _result(body, "open_ended", "vera", suppression, "Account-state trigger uses current account risk and asks for a low-effort next step.")
 
     metric = payload.get("metric_or_topic") or kind.replace("_", " ")
+    facts = _payload_facts(payload, limit=2)
+    anchor = _merchant_anchor(merchant, offer)
     body = (
-        f"{name}, quick signal for {_merchant_short_name(merchant)}: {metric}. "
-        f"Given {perf.get('views', 'your recent')} views and {perf.get('calls', 'current')} calls, want one draft action?"
+        f"{name}, quick signal for {_merchant_short_name(merchant)}"
     )
+    if anchor:
+        body += f" in {anchor}"
+    body += f": {_humanize(metric)}"
+    if facts:
+        body += f" ({'; '.join(facts)})"
+    body += ". Want me to turn this into one customer-facing post or WhatsApp draft?"
     return _result(body, "open_ended", "vera", suppression, "Fallback chooses a concrete merchant metric plus trigger topic and asks for one draft action.")
 
 def missing_customer_message(merchant: dict[str, Any], trigger: dict[str, Any]) -> dict[str, str]:

@@ -165,6 +165,58 @@ class CustomerFallbackQualityTests(unittest.TestCase):
         )
 
 
+class GeneralizationQualityTests(unittest.TestCase):
+    def test_unknown_merchant_trigger_summarizes_payload_and_context(self) -> None:
+        category = {
+            "slug": "restaurants",
+            "display_name": "Restaurants",
+        }
+        merchant = {
+            "merchant_id": "m_synthetic_cafe",
+            "category_slug": "restaurants",
+            "identity": {
+                "name": "Test Cafe",
+                "owner_first_name": "Asha",
+                "locality": "Indiranagar",
+                "city": "Bangalore",
+            },
+            "performance": {"views": 4200, "calls": 31, "ctr": 0.034},
+            "offers": [{"title": "Lunch Combo @ Rs199", "status": "active"}],
+        }
+        trigger = {
+            "id": "trg_synthetic",
+            "kind": "new_local_signal",
+            "payload": {
+                "search_query": "family lunch near me",
+                "delta_yoy": 0.41,
+                "window": "7d",
+            },
+        }
+        msg = compose(category, merchant, trigger)
+        body = msg["body"].lower()
+        for term in ("asha", "indiranagar", "4200", "31", "lunch combo", "family lunch near me", "41%"):
+            self.assertIn(term, body)
+        self.assertNotIn("metric_or_topic", body)
+
+    def test_curious_ask_uses_review_or_signal_when_available(self) -> None:
+        category = {"slug": "salons", "display_name": "Salons"}
+        merchant = {
+            "merchant_id": "m_synthetic_salon",
+            "category_slug": "salons",
+            "identity": {"name": "Glow Room", "owner_first_name": "Naina"},
+            "review_themes": [
+                {"theme": "hair spa", "sentiment": "pos", "occurrences_30d": 9},
+            ],
+            "signals": ["weekday_afternoon_gap"],
+        }
+        trigger = {"id": "ask_synthetic", "kind": "curious_ask_due", "payload": {}}
+        msg = compose(category, merchant, trigger)
+        body = msg["body"].lower()
+        self.assertIn("hair spa", body)
+        self.assertIn("9", body)
+        self.assertIn("google post", body)
+
+
 class ReplyHandlerTests(unittest.TestCase):
     def test_auto_reply_waits_or_ends(self) -> None:
         decision = decide_reply(
