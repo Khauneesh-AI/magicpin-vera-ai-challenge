@@ -1,4 +1,4 @@
-# Vera Challenge Submission
+# Vera Challenge Submission — DakshTheCoder
 
 ## Approach
 
@@ -30,5 +30,3 @@ python tools\validate_submission.py
 uvicorn bot:app --host 0.0.0.0 --port 8000
 python tools\smoke_endpoints.py http://127.0.0.1:8000
 ```
-
-Before final submission, replace placeholder team metadata in `vera_bot/config.py`.

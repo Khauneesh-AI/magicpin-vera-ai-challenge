@@ -7,7 +7,7 @@ from vera_bot.main import app
 from tools.validate_submission import REQUIRED, URL_RE, validate_rows
 from vera_bot import routes
 from vera_bot.reply_handler import decide_reply
-from vera_bot.schemas import ContextBody
+from vera_bot.schemas import ContextBody, ReplyBody
 from vera_bot.store import Store
 from vera_bot.validators import finalize_message
 
@@ -114,6 +114,25 @@ class ReplyHandlerTests(unittest.TestCase):
         decision = decide_reply(conversation_id="c2", message="ok go ahead", history=[])
         self.assertEqual(decision["action"], "send")
         self.assertIn("commit", decision["rationale"].lower())
+
+    def test_repeated_auto_reply_ends_across_conversations_for_same_merchant(self) -> None:
+        original_store = routes.store
+        routes.store = Store()
+        try:
+            actions = []
+            for index in range(1, 5):
+                decision = routes.reply(
+                    ReplyBody(
+                        conversation_id=f"auto-repeat-{index}",
+                        merchant_id="merchant-auto-repeat",
+                        message="Thank you for contacting us! Our team will respond shortly.",
+                        turn_number=index,
+                    )
+                )
+                actions.append(decision["action"])
+            self.assertIn("end", actions)
+        finally:
+            routes.store = original_store
 
 
 if __name__ == "__main__":

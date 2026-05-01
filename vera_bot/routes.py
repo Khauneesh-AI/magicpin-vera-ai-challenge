@@ -8,7 +8,7 @@ from fastapi import APIRouter, Response
 
 from vera_bot import __version__, config
 from vera_bot.composer import compose
-from vera_bot.reply_handler import decide_reply
+from vera_bot.reply_handler import decide_reply, is_auto_reply
 from vera_bot.schemas import ContextBody, ReplyBody, TickBody
 from vera_bot.store import Store
 
@@ -123,10 +123,14 @@ def reply(body: ReplyBody) -> dict[str, Any]:
         body.conversation_id,
         {"from": body.from_role, "body": body.message, "turn_number": body.turn_number},
     )
+    merchant_auto_reply_count = 0
+    if body.merchant_id and is_auto_reply(body.message):
+        merchant_auto_reply_count = store.remember_auto_reply(body.merchant_id, body.message)
     decision = decide_reply(
         conversation_id=body.conversation_id,
         message=body.message,
         history=history[:-1],
+        merchant_auto_reply_count=merchant_auto_reply_count,
     )
     if decision["action"] == "send":
         store.add_turn(body.conversation_id, {"from": "bot", "body": decision.get("body", "")})

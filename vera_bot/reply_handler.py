@@ -79,6 +79,7 @@ def decide_reply(
     conversation_id: str,
     message: str,
     history: list[dict[str, Any]],
+    merchant_auto_reply_count: int = 0,
 ) -> dict[str, Any]:
     if is_hostile_or_opt_out(message):
         return {"action": "end", "rationale": "Merchant opted out or sent a hostile reply."}
@@ -89,13 +90,13 @@ def decide_reply(
             "cta": "binary_yes_no",
             "rationale": "Off-topic reply redirected once to Vera's merchant-growth scope.",
         }
-    if is_auto_reply(message) or repeated_in_history(message, history):
+    if is_auto_reply(message) or repeated_in_history(message, history) or merchant_auto_reply_count:
         auto_count = sum(
             1
             for turn in history
             if turn.get("from") != "bot" and is_auto_reply(str(turn.get("body", "")))
         )
-        if auto_count >= 2 or repeated_in_history(message, history):
+        if merchant_auto_reply_count >= 3 or auto_count >= 2 or repeated_in_history(message, history):
             return {"action": "end", "rationale": "Auto-reply loop detected; conversation ended gracefully."}
         return {
             "action": "wait",

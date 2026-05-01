@@ -90,6 +90,13 @@ class Store:
     def seen_recent_body(self, merchant_id: str, body: str) -> bool:
         return body_hash(body) in self.recent_bodies.get(merchant_id, ())
 
+    def remember_auto_reply(self, merchant_id: str, body: str) -> int:
+        digest = body_hash(body)
+        hashes = self.auto_reply_hashes.setdefault(merchant_id, [])
+        hashes.append(digest)
+        del hashes[:-10]
+        return sum(1 for item in hashes if item == digest)
+
     def add_turn(self, conversation_id: str, turn: dict[str, Any]) -> None:
         self.conversations.setdefault(conversation_id, []).append(turn)
 

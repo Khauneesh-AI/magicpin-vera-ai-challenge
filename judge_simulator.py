@@ -20,29 +20,38 @@ Author: magicpin AI Challenge Team
 # ██████  CONFIGURATION - EDIT THIS SECTION ██████
 # =============================================================================
 
+import os
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
 # Your bot's URL (where your bot is running)
-BOT_URL = "http://localhost:8080"
+BOT_URL = _env("BOT_URL", "http://localhost:8080")
 
 # Choose your LLM provider: "openai", "anthropic", "gemini", "deepseek", "groq", "ollama", "openrouter"
-LLM_PROVIDER = "openai"
+LLM_PROVIDER = _env("LLM_PROVIDER", "openai").lower()
 
-# Your API key (paste your key here)
-LLM_API_KEY = ""  # <-- PUT YOUR API KEY HERE
+# Your API key. Prefer environment variables; never paste secrets into this file.
+LLM_API_KEY = (
+    _env("LLM_API_KEY")
+    or (_env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY") if LLM_PROVIDER == "gemini" else "")
+)
 
 # Model to use (leave empty for default, or specify like "gpt-4o", "claude-3-5-sonnet-20241022", etc.)
-LLM_MODEL = ""  # <-- Optional: specify model or leave empty for default
+LLM_MODEL = _env("LLM_MODEL")
 
 # For Ollama only: local server URL
-OLLAMA_URL = "http://localhost:11434"
+OLLAMA_URL = _env("OLLAMA_URL", "http://localhost:11434")
 
 # Which test to run by default
-TEST_SCENARIO = "all"
+TEST_SCENARIO = _env("TEST_SCENARIO", "all")
 
 # =============================================================================
 # ██████  END OF CONFIGURATION - DON'T EDIT BELOW THIS LINE ██████
 # =============================================================================
 
-import os
 import sys
 import json
 import time
