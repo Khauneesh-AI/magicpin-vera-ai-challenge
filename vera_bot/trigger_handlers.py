@@ -95,8 +95,22 @@ def _find_digest(category: dict[str, Any], trigger: dict[str, Any]) -> dict[str,
 
 def _customer_name(customer: dict[str, Any] | None) -> str:
     if not customer:
-        return "there"
-    return customer.get("identity", {}).get("name", "there")
+        return ""
+    return str(customer.get("identity", {}).get("name") or "").strip()
+
+
+def _greeting(customer: dict[str, Any] | None, salutation: str = "Hi") -> str:
+    name = _customer_name(customer)
+    return f"{salutation} {name}" if name else salutation
+
+
+def _humanize(value: object) -> str:
+    text = str(value or "").replace("_", " ").strip()
+    text = re.sub(r"\b30day\b", "30-day", text, flags=re.I)
+    text = re.sub(r"\b(\d+)\s+month\b", r"\1-month", text, flags=re.I)
+    text = re.sub(r"^(.+?) program 30-day$", r"30-day \1 program", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text)
+    return text
 
 
 def _hi_en(customer: dict[str, Any] | None, merchant: dict[str, Any]) -> bool:
@@ -149,7 +163,7 @@ def _customer_message(
 ) -> dict[str, str]:
     kind = trigger.get("kind", "")
     payload = trigger.get("payload", {})
-    name = _customer_name(customer)
+    greeting = _greeting(customer)
     merchant_name = _merchant_short_name(merchant)
     offer = _active_offer(merchant, category)
     suppression = trigger.get("suppression_key", f"{kind}:{customer.get('customer_id', '')}")
@@ -159,10 +173,10 @@ def _customer_message(
         slots = payload.get("available_slots") or payload.get("next_session_options") or []
         slot_bits = [s.get("label") for s in slots if isinstance(s, dict) and s.get("label")]
         slot_text = " or ".join(slot_bits[:2]) if slot_bits else ("tomorrow" if kind == "appointment_tomorrow" else "this week")
-        service = str(payload.get("service_due") or ("appointment" if kind == "appointment_tomorrow" else "follow-up")).replace("_", " ")
-        mix = "Apke liye" if hi else "I can hold"
+        service = _humanize(payload.get("service_due") or ("appointment" if kind == "appointment_tomorrow" else "follow-up"))
+        mix = "I can hold"
         due_line = f"Your {service} is tomorrow" if kind == "appointment_tomorrow" else f"Your {service} is due"
-        body = f"Hi {name}, {merchant_name} here. {due_line}. {mix} a slot for {slot_text}"
+        body = f"{greeting}, {merchant_name} here. {due_line}. {mix} a slot for {slot_text}"
         if offer:
             body += f" with {offer}"
         body += ". Reply YES to confirm, or share another time."
@@ -174,30 +188,50 @@ def _customer_message(
             "Customer-scoped reminder uses due service, available slot, merchant identity, and active offer without medical overclaim.",
         )
 
-    if kind in {"customer_lapsed_hard", "customer_lapsed_soft", "trial_followup"}:
-        days = payload.get("days_since_last_visit")
-        focus = str(payload.get("previous_focus") or customer.get("preferences", {}).get("training_focus") or "").replace("_", " ")
+    if kind == "trial_followup":
+        trial_date = payload.get("trial_date")
         slot = ""
         options = payload.get("next_session_options") or []
         if options and isinstance(options[0], dict):
             slot = options[0].get("label", "")
+        service_word = "kids yoga" if category.get("slug") == "gyms" else "trial"
+        body = (
+            f"{greeting}, {merchant.get('identity', {}).get('owner_first_name', merchant_name)} from {merchant_name} here. "
+            f"Thanks for trying the {service_word} session"
+        )
+        if trial_date:
+            body += f" on {trial_date}"
+        body += f". I can hold the next spot on {slot}" if slot else ". I can hold the next spot this week"
+        body += ". Reply YES to continue, or tell me a better time."
+        return _result(
+            body,
+            "binary_yes_no",
+            "merchant_on_behalf",
+            suppression,
+            "Trial follow-up references the trial date/next slot and asks for a clear continuation signal.",
+        )
+
+    if kind in {"customer_lapsed_hard", "customer_lapsed_soft"}:
+        days = payload.get("days_since_last_visit")
+        focus = _humanize(payload.get("previous_focus") or customer.get("preferences", {}).get("training_focus") or "")
+        months = payload.get("previous_membership_months")
         detail = f"It's been {days} days" if days else "Quick check-in"
         if category.get("slug") == "gyms":
             body = (
-                f"Hi {name}, {merchant.get('identity', {}).get('owner_first_name', merchant_name)} from {merchant_name} here. "
-                f"{detail}; no pressure. "
+                f"{greeting}, {merchant.get('identity', {}).get('owner_first_name', merchant_name)} from {merchant_name} here. "
+                f"{detail} since your last visit; no pressure. "
             )
-            body += f"I can hold a trial spot for {focus or 'your goal'}"
-            body += f" on {slot}" if slot else " this week"
-            body += ". Reply YES; no auto-charge."
+            if months:
+                body += f"You stayed {months} months, and {focus or 'your goal'} was the focus. "
+            body += "I can hold an easy comeback session this week. Reply YES; no auto-charge."
         elif category.get("slug") == "salons":
             body = (
-                f"Hi {name}, {merchant_name} here. We have not seen you in a while. "
+                f"{greeting}, {merchant_name} here. We have not seen you in a while. "
                 f"Want me to hold your preferred slot for {offer or 'your next service'}?"
             )
         else:
             body = (
-                f"Hi {name}, {merchant_name} here. {detail}. "
+                f"{greeting}, {merchant_name} here. {detail}. "
                 f"Want me to keep {offer or 'your usual service'} ready for you this week?"
             )
         return _result(
@@ -210,9 +244,9 @@ def _customer_message(
 
     if kind == "wedding_package_followup":
         days = payload.get("days_to_wedding")
-        window = str(payload.get("next_step_window_open", "bridal prep")).replace("_", " ")
+        window = _humanize(payload.get("next_step_window_open", "bridal prep"))
         body = (
-            f"Hi {name}, {merchant_name} here. {days} days to your wedding; "
+            f"{greeting}, {merchant_name} here. {days} days to your wedding; "
             f"this is a good window for {window}. "
             f"Want me to block your preferred Saturday slot for the first session?"
         )
@@ -227,7 +261,7 @@ def _customer_message(
     if kind == "chronic_refill_due":
         if category.get("slug") != "pharmacies":
             body = (
-                f"Hi {name}, {merchant_name} here. Quick follow-up from your last visit is due. "
+                f"{greeting}, {merchant_name} here. Quick follow-up from your last visit is due. "
                 "Want us to hold a slot this week? Reply YES, or share another time."
             )
             return _result(
@@ -241,7 +275,7 @@ def _customer_message(
         date = str(payload.get("stock_runs_out_iso", "")).split("T")[0] or "soon"
         delivery = " Free home delivery to saved address." if payload.get("delivery_address_saved") else ""
         body = (
-            f"Namaste {name}, {merchant_name} here. {meds} stock runs out on {date}. "
+            f"{_greeting(customer, 'Namaste')}, {merchant_name} here. Your {meds} stock runs out on {date}. "
             f"Same dose/brand pack can be kept ready.{delivery} Reply CONFIRM to dispatch, or call us if dose changed."
         )
         return _result(
@@ -253,7 +287,7 @@ def _customer_message(
         )
 
     body = (
-        f"Hi {name}, {merchant_name} here. Quick update for you: "
+        f"{greeting}, {merchant_name} here. Quick update for you: "
         f"{str(kind).replace('_', ' ')} is due. Reply YES if you want us to help."
     )
     return _result(body, "binary_yes_no", "merchant_on_behalf", suppression, "Generic customer-scoped fallback uses trigger kind and merchant identity.")
@@ -380,7 +414,8 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
             delta = perf.get("delta_7d", {}).get(f"{metric}_pct")
         driver = str(payload.get("likely_driver") or "recent activity").replace("_", " ")
         baseline = payload.get("vs_baseline") or perf.get(metric)
-        body = f"{name}, {metric} is up {_pct(delta, signed=True)}"
+        verb = "are" if str(metric).endswith("s") else "is"
+        body = f"{name}, {metric} {verb} up {_pct(delta, signed=True)}"
         if baseline:
             body += f" vs baseline {baseline}"
         body += f". Looks tied to {driver}. Want me to double down with a fresh post today?"

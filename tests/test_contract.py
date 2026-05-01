@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import unittest
+from pathlib import Path
 
+from vera_bot.composer import compose
 from tools.generate_submission import build_rows
 from vera_bot.main import app
 from tools.validate_submission import REQUIRED, URL_RE, validate_rows
@@ -10,6 +13,18 @@ from vera_bot.reply_handler import decide_reply
 from vera_bot.schemas import ContextBody, ReplyBody
 from vera_bot.store import Store
 from vera_bot.validators import finalize_message
+
+ROOT = Path(__file__).resolve().parents[1]
+EXPANDED = ROOT / "expanded"
+
+
+def load_context(scope: str, context_id: str) -> dict:
+    folder = {
+        "category": "categories",
+        "merchant": "merchants",
+        "trigger": "triggers",
+    }[scope]
+    return json.loads((EXPANDED / folder / f"{context_id}.json").read_text(encoding="utf-8"))
 
 
 class SubmissionContractTests(unittest.TestCase):
@@ -98,6 +113,56 @@ class ApiTests(unittest.TestCase):
         response = routes.push_context(stale)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["reason"], "stale_version")
+
+
+class CustomerFallbackQualityTests(unittest.TestCase):
+    def compose_without_customer(self, trigger_id: str) -> dict[str, str]:
+        trigger = load_context("trigger", trigger_id)
+        merchant = load_context("merchant", trigger["merchant_id"])
+        category = load_context("category", merchant["category_slug"])
+        return compose(category, merchant, trigger, customer=None)
+
+    def assert_payload_aware_customer_fallback(
+        self,
+        trigger_id: str,
+        required_terms: tuple[str, ...],
+    ) -> None:
+        msg = self.compose_without_customer(trigger_id)
+        body = msg["body"].lower()
+        self.assertNotIn("customer trigger", body)
+        self.assertEqual(msg["send_as"], "merchant_on_behalf")
+        for term in required_terms:
+            self.assertIn(term.lower(), body)
+
+    def test_recall_fallback_uses_service_and_slot(self) -> None:
+        self.assert_payload_aware_customer_fallback(
+            "trg_003_recall_due_priya",
+            ("6-month cleaning", "Wed 5 Nov"),
+        )
+
+    def test_bridal_fallback_uses_wedding_countdown(self) -> None:
+        self.assert_payload_aware_customer_fallback(
+            "trg_007_bridal_followup_kavya",
+            ("196", "skin prep"),
+        )
+
+    def test_gym_lapsed_fallback_uses_days_and_focus(self) -> None:
+        self.assert_payload_aware_customer_fallback(
+            "trg_015_winback_rashmi",
+            ("57 days", "weight loss"),
+        )
+
+    def test_trial_fallback_uses_trial_and_next_slot(self) -> None:
+        self.assert_payload_aware_customer_fallback(
+            "trg_017_kids_yoga_trial_followup_karthik",
+            ("2026-04-22", "Sat 3 May"),
+        )
+
+    def test_refill_fallback_uses_meds_and_runout_date(self) -> None:
+        self.assert_payload_aware_customer_fallback(
+            "trg_019_chronic_refill_grandfather",
+            ("metformin", "2026-04-28"),
+        )
 
 
 class ReplyHandlerTests(unittest.TestCase):

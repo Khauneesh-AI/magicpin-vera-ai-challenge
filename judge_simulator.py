@@ -503,6 +503,20 @@ RESPOND ONLY WITH THIS EXACT JSON FORMAT:
     def __init__(self, llm: LLMProvider, dataset: DatasetLoader):
         self.llm = llm
         self.dataset = dataset
+        default_delay = "7" if isinstance(llm, GeminiProvider) else "0"
+        self.score_delay_s = float(_env("LLM_SCORE_DELAY_S", default_delay) or "0")
+        self.retry_attempts = int(_env("LLM_RETRY_ATTEMPTS", "3") or "3")
+        self.retry_base_s = float(_env("LLM_RETRY_BASE_S", "20") or "20")
+        self._last_llm_call = 0.0
+
+    def _respect_rate_limit(self) -> None:
+        if self.score_delay_s <= 0:
+            return
+        elapsed = time.time() - self._last_llm_call
+        wait_s = self.score_delay_s - elapsed
+        if wait_s > 0:
+            time.sleep(wait_s)
+        self._last_llm_call = time.time()
 
     def score(self, action: Dict, category: Dict, merchant: Dict,
               trigger: Dict, customer: Dict = None) -> ScoreResult:
@@ -539,9 +553,18 @@ Send As: {action.get('send_as', 'vera')}
 Score each dimension 0-10 with clear reasoning. Be STRICT."""
 
         try:
-            print_llm("Analyzing message...")
-            response = self.llm.complete(prompt, self.SYSTEM)
-            return self._parse_response(response, action)
+            for attempt in range(1, self.retry_attempts + 1):
+                try:
+                    self._respect_rate_limit()
+                    print_llm("Analyzing message...")
+                    response = self.llm.complete(prompt, self.SYSTEM)
+                    return self._parse_response(response, action)
+                except urlerror.HTTPError as exc:
+                    if exc.code != 429 or attempt >= self.retry_attempts:
+                        raise
+                    wait_s = self.retry_base_s * attempt
+                    print_warn(f"Rate limited by LLM; retrying in {wait_s:.0f}s")
+                    time.sleep(wait_s)
         except Exception as e:
             print_warn(f"LLM error: {e}")
             return self._fallback_score(action)

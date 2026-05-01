@@ -5,7 +5,6 @@ from typing import Any
 from vera_bot.trigger_handlers import (
     customer_message,
     merchant_message,
-    missing_customer_message,
 )
 from vera_bot.validators import finalize_message
 
@@ -17,7 +16,7 @@ def compose(
     customer: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     if customer is None and trigger.get("scope") == "customer":
-        raw = missing_customer_message(merchant, trigger)
+        raw = customer_message(category, merchant, trigger, {})
     elif customer is not None or trigger.get("scope") == "customer":
         raw = customer_message(category, merchant, trigger, customer or {})
     else:
