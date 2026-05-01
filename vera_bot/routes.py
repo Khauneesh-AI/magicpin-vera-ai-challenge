@@ -4,7 +4,7 @@ import re
 import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from vera_bot import __version__, config
 from vera_bot.composer import compose
@@ -54,6 +54,11 @@ def healthz() -> dict[str, Any]:
         "uptime_seconds": round(time.time() - STARTED_AT, 3),
         "contexts_loaded": store.count_contexts(),
     }
+
+
+@router.head("/healthz")
+def healthz_head() -> Response:
+    return Response(status_code=200)
 
 
 @router.get("/metadata")

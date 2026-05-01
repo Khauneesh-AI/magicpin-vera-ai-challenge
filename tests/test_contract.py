@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from tools.generate_submission import build_rows
+from vera_bot.main import app
 from tools.validate_submission import REQUIRED, URL_RE, validate_rows
 from vera_bot import routes
 from vera_bot.reply_handler import decide_reply
@@ -68,6 +69,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(routes.healthz()["status"], "ok")
         metadata = routes.metadata()
         self.assertEqual(metadata["model"], "deterministic-no-llm")
+
+    def test_health_accepts_head_for_monitors(self) -> None:
+        methods = {
+            method
+            for route in app.routes
+            if getattr(route, "path", "") == "/v1/healthz"
+            for method in getattr(route, "methods", set())
+        }
+        self.assertIn("HEAD", methods)
+        self.assertEqual(routes.healthz_head().status_code, 200)
 
     def test_context_stale_response_shape(self) -> None:
         context_id = "m-test-api"
