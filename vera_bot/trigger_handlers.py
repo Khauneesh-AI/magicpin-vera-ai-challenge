@@ -184,6 +184,18 @@ def _find_digest(category: dict[str, Any], trigger: dict[str, Any]) -> dict[str,
     return {}
 
 
+def _find_digest_by_terms(category: dict[str, Any], *terms: str) -> dict[str, Any]:
+    wanted = [term.lower() for term in terms if term]
+    for item in category.get("digest", []):
+        text = " ".join(
+            str(item.get(key, ""))
+            for key in ("kind", "title", "summary", "actionable")
+        ).lower()
+        if all(term in text for term in wanted):
+            return item
+    return {}
+
+
 def _customer_name(customer: dict[str, Any] | None) -> str:
     if not customer:
         return ""
@@ -552,9 +564,17 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
 
     if kind in {"festival_upcoming", "ipl_match_today", "category_seasonal"}:
         if kind == "ipl_match_today":
+            is_weeknight = bool(payload.get("is_weeknight"))
+            match_action = (
+                f"Use {offer or 'your active combo'} for dine-in covers"
+                if is_weeknight
+                else "Use a delivery-first home-watch combo"
+            )
+            channel = "dine-in covers" if is_weeknight else "home-watch delivery orders"
             body = (
                 f"{name}, {payload.get('match')} at {payload.get('venue')} tonight {payload.get('match_time_iso', '')[11:16]}. "
-                f"Since it is not weeknight, push delivery over dine-in. Use {offer or 'your active combo'}. Want banner copy?"
+                f"{'Weeknight matches can lift covers' if is_weeknight else 'Weekend matches shift demand to home-watch parties'}; "
+                f"push {channel}. {match_action}. Want banner copy?"
             )
         elif kind == "category_seasonal":
             trends = ", ".join(str(x).replace("_", " ") for x in payload.get("trends", [])[:3])
@@ -568,10 +588,17 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
             festival = payload.get("festival", "upcoming festival")
             days = payload.get("days_until")
             timing = f"{festival} is {days} days away" if days not in (None, "") else f"{festival} window is coming"
-            body = (
-                f"{name}, {timing}. "
-                f"Best move: one service-price post, not a blanket discount. Want me to draft it around {offer or 'your top service'}?"
-            )
+            seasonal = _find_digest_by_terms(category, "bridal") if cat == "salons" else {}
+            if seasonal:
+                body = (
+                    f"{name}, {festival} is later, but the April-May mini-bridal window is open now. "
+                    "Use a Bridal Trial post to book a 2-month skincare package before Oct-Dec rush. Want the draft?"
+                )
+            else:
+                body = (
+                    f"{name}, {timing}. "
+                    f"Best move: one service-price post, not a blanket discount. Want me to draft it around {offer or 'your top service'}?"
+                )
         return _result(body, "open_ended", "vera", suppression, "Seasonal/event trigger links timing with a category-appropriate action and existing offer.")
 
     if kind in {"review_theme_emerged", "milestone_reached"}:

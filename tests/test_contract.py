@@ -269,6 +269,28 @@ class GeneralizationQualityTests(unittest.TestCase):
         msg = compose(category, merchant, trigger)
         self.assertIn("views are down", msg["body"])
 
+    def test_salon_festival_uses_immediate_bridal_window(self) -> None:
+        trigger = load_context("trigger", "trg_006_festival_diwali")
+        merchant = load_context("merchant", trigger["merchant_id"])
+        category = load_context("category", merchant["category_slug"])
+        msg = compose(category, merchant, trigger)
+        body = msg["body"].lower()
+        self.assertIn("april-may", body)
+        self.assertIn("bridal", body)
+        self.assertIn("2-month", body)
+        self.assertNotIn("188 days away", body)
+
+    def test_weekend_ipl_avoids_weeknight_offer_mismatch(self) -> None:
+        trigger = load_context("trigger", "trg_010_ipl_match_delhi")
+        merchant = load_context("merchant", trigger["merchant_id"])
+        category = load_context("category", merchant["category_slug"])
+        msg = compose(category, merchant, trigger)
+        body = msg["body"].lower()
+        self.assertIn("home-watch", body)
+        self.assertIn("delivery", body)
+        self.assertNotIn("not weeknight", body)
+        self.assertNotIn("tue-thu", body)
+
 
 class ReplyHandlerTests(unittest.TestCase):
     def test_auto_reply_waits_or_ends(self) -> None:
