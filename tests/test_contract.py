@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import unittest
+
+from tools.generate_submission import build_rows
+from tools.validate_submission import REQUIRED, URL_RE, validate_rows
+from vera_bot import routes
+from vera_bot.reply_handler import decide_reply
+from vera_bot.schemas import ContextBody
+from vera_bot.store import Store
+from vera_bot.validators import finalize_message
+
+
+class SubmissionContractTests(unittest.TestCase):
+    def test_generated_rows_match_contract(self) -> None:
+        rows = build_rows()
+        validate_rows(rows)
+
+    def test_deterministic_generation(self) -> None:
+        self.assertEqual(build_rows(), build_rows())
+
+    def test_required_keys_are_expected(self) -> None:
+        self.assertEqual(
+            REQUIRED,
+            {"test_id", "body", "cta", "send_as", "suppression_key", "rationale"},
+        )
+
+    def test_url_regex_catches_urls(self) -> None:
+        self.assertIsNotNone(URL_RE.search("https://example.com"))
+        self.assertIsNotNone(URL_RE.search("www.example.com"))
+
+
+class StoreTests(unittest.TestCase):
+    def test_context_stale_version_does_not_overwrite(self) -> None:
+        store = Store()
+        first = store.push_context("merchant", "m1", 2, {"name": "new"})
+        stale = store.push_context("merchant", "m1", 1, {"name": "old"})
+        self.assertTrue(first["accepted"])
+        self.assertFalse(stale["accepted"])
+        self.assertEqual(stale["reason"], "stale_version")
+        self.assertEqual(store.get_payload("merchant", "m1"), {"name": "new"})
+
+    def test_suppression_is_merchant_scoped(self) -> None:
+        store = Store()
+        store.mark_sent("m1", "same-key")
+        self.assertTrue(store.was_sent("m1", "same-key"))
+        self.assertFalse(store.was_sent("m2", "same-key"))
+
+
+class ValidatorTests(unittest.TestCase):
+    def test_finalize_strips_urls_and_none(self) -> None:
+        msg = {
+            "body": "See https://example.com None",
+            "cta": "Open www.example.com",
+            "send_as": "bad",
+            "suppression_key": "",
+            "rationale": "",
+        }
+        out = finalize_message(msg, fallback_key="fallback:key")
+        self.assertNotRegex(out["body"], r"https?://|www\.")
+        self.assertNotIn("None", out["body"])
+        self.assertEqual(out["send_as"], "vera")
+        self.assertEqual(out["suppression_key"], "fallback:key")
+
+
+class ApiTests(unittest.TestCase):
+    def test_health_and_metadata(self) -> None:
+        self.assertEqual(routes.healthz()["status"], "ok")
+        metadata = routes.metadata()
+        self.assertEqual(metadata["model"], "deterministic-no-llm")
+
+    def test_context_stale_response_shape(self) -> None:
+        context_id = "m-test-api"
+        body = ContextBody(
+            scope="merchant",
+            context_id=context_id,
+            version=2,
+            payload={"merchant_id": context_id},
+        )
+        self.assertTrue(routes.push_context(body)["accepted"])
+        stale = ContextBody(
+            scope="merchant",
+            context_id=context_id,
+            version=1,
+            payload={"merchant_id": "old"},
+        )
+        response = routes.push_context(stale)
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["reason"], "stale_version")
+
+
+class ReplyHandlerTests(unittest.TestCase):
+    def test_auto_reply_waits_or_ends(self) -> None:
+        decision = decide_reply(
+            conversation_id="c1",
+            message="Aapki jaankari ke liye bahut-bahut shukriya",
+            history=[],
+        )
+        self.assertIn(decision["action"], {"send", "wait", "end"})
+        self.assertIn("auto", decision["rationale"].lower())
+
+    def test_explicit_commit_sends_action_confirmation(self) -> None:
+        decision = decide_reply(conversation_id="c2", message="ok go ahead", history=[])
+        self.assertEqual(decision["action"], "send")
+        self.assertIn("commit", decision["rationale"].lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

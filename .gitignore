@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+docx_render/
+tmp_render/
+repo_analysis/
+
+.env
+.env.*
+*.log
