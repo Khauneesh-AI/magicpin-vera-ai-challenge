@@ -32,6 +32,16 @@ class SubmissionContractTests(unittest.TestCase):
         rows = build_rows()
         validate_rows(rows)
 
+    def test_generated_rows_do_not_expose_mojibake(self) -> None:
+        bad_fragments = ("\u00e2", "\ufffd")
+        for row in build_rows():
+            body = row["body"]
+            self.assertFalse(
+                any(fragment in body for fragment in bad_fragments),
+                body,
+            )
+            self.assertNotIn("last your last update", body)
+
     def test_deterministic_generation(self) -> None:
         self.assertEqual(build_rows(), build_rows())
 
@@ -155,7 +165,7 @@ class CustomerFallbackQualityTests(unittest.TestCase):
     def test_trial_fallback_uses_trial_and_next_slot(self) -> None:
         self.assert_payload_aware_customer_fallback(
             "trg_017_kids_yoga_trial_followup_karthik",
-            ("2026-04-22", "Sat 3 May"),
+            ("22 Apr", "Sat 3 May"),
         )
 
     def test_refill_fallback_uses_meds_and_runout_date(self) -> None:
@@ -215,6 +225,49 @@ class GeneralizationQualityTests(unittest.TestCase):
         self.assertIn("hair spa", body)
         self.assertIn("9", body)
         self.assertIn("google post", body)
+        self.assertIn("9 reviews mention hair spa", body)
+
+    def test_customer_greeting_strips_parenthetical_notes(self) -> None:
+        category = {"slug": "gyms", "display_name": "Gyms"}
+        merchant = {
+            "merchant_id": "m_synthetic_gym",
+            "category_slug": "gyms",
+            "identity": {"name": "Zen Test Gym", "owner_first_name": "Padma"},
+        }
+        trigger = {
+            "id": "trial_synthetic",
+            "kind": "trial_followup",
+            "payload": {
+                "trial_date": "2026-04-22",
+                "next_session_options": [{"label": "Sat 3 May, 8am"}],
+            },
+        }
+        customer = {"identity": {"name": "Karthik (parent: Sumitra)"}}
+        msg = compose(category, merchant, trigger, customer)
+        body = msg["body"]
+        self.assertIn("Hi Karthik,", body)
+        self.assertNotIn("parent:", body)
+        self.assertIn("22 Apr", body)
+
+    def test_seasonal_perf_dip_uses_plural_metric_grammar(self) -> None:
+        category = {"slug": "gyms", "display_name": "Gyms"}
+        merchant = {
+            "merchant_id": "m_synthetic_gym",
+            "category_slug": "gyms",
+            "identity": {"name": "Peak Fitness", "owner_first_name": "Riya"},
+            "customer_aggregate": {"total_active_members": 130},
+        }
+        trigger = {
+            "id": "seasonal_synthetic",
+            "kind": "seasonal_perf_dip",
+            "payload": {
+                "metric": "views",
+                "delta_pct": -0.2,
+                "is_expected_seasonal": True,
+            },
+        }
+        msg = compose(category, merchant, trigger)
+        self.assertIn("views are down", msg["body"])
 
 
 class ReplyHandlerTests(unittest.TestCase):

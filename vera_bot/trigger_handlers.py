@@ -54,6 +54,12 @@ def _pct(value: Any, signed: bool = False) -> str:
     return str(value)
 
 
+def _abs_pct(value: Any) -> str:
+    if isinstance(value, (int, float)):
+        return _pct(abs(value))
+    return str(value).lstrip("+-")
+
+
 def _pct_field(value: Any) -> str:
     if isinstance(value, (int, float)):
         return f"{value * 100:.0f}%" if abs(value) <= 1 else f"{value:.0f}%"
@@ -64,6 +70,21 @@ def _money(value: Any) -> str:
     if value in (None, ""):
         return ""
     return f"Rs {value}"
+
+
+def _short_date(value: Any) -> str:
+    text = str(value or "").split("T")[0]
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if not match:
+        return _humanize(text)
+    _, month, day = match.groups()
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    month_index = max(1, min(12, int(month))) - 1
+    return f"{int(day)} {months[month_index]}"
+
+
+def _metric_verb(metric: Any) -> str:
+    return "are" if str(metric).strip().lower().endswith("s") else "is"
 
 
 def _payload_facts(payload: dict[str, Any], limit: int = 2) -> list[str]:
@@ -104,8 +125,23 @@ def _top_review_theme(merchant: dict[str, Any]) -> str:
     name = _humanize(theme.get("theme", ""))
     count = theme.get("occurrences_30d")
     if name and count:
-        return f"{name} from {count} reviews"
+        return f"{count} reviews mention {name}"
     return name
+
+
+def _matched_offer(merchant: dict[str, Any], category: dict[str, Any] | None, *terms: str) -> str:
+    term_list = [term.lower() for term in terms if term]
+    offers = list(merchant.get("offers", []))
+    if category:
+        offers.extend(category.get("offer_catalog", []))
+    for offer in offers:
+        title = str(offer.get("title", ""))
+        if offer.get("status") not in (None, "active") or not title:
+            continue
+        lowered = title.lower()
+        if any(term in lowered for term in term_list):
+            return title
+    return _active_offer(merchant, category)
 
 
 def _merchant_anchor(merchant: dict[str, Any], offer: str = "") -> str:
@@ -151,7 +187,8 @@ def _find_digest(category: dict[str, Any], trigger: dict[str, Any]) -> dict[str,
 def _customer_name(customer: dict[str, Any] | None) -> str:
     if not customer:
         return ""
-    return str(customer.get("identity", {}).get("name") or "").strip()
+    name = str(customer.get("identity", {}).get("name") or "").strip()
+    return re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
 
 
 def _greeting(customer: dict[str, Any] | None, salutation: str = "Hi") -> str:
@@ -255,7 +292,7 @@ def _customer_message(
             f"Thanks for trying the {service_word} session"
         )
         if trial_date:
-            body += f" on {trial_date}"
+            body += f" on {_short_date(trial_date)}"
         body += f". I can hold the next spot on {slot}" if slot else ". I can hold the next spot this week"
         body += ". Reply YES to continue, or tell me a better time."
         return _result(
@@ -300,17 +337,23 @@ def _customer_message(
     if kind == "wedding_package_followup":
         days = payload.get("days_to_wedding")
         window = _humanize(payload.get("next_step_window_open", "bridal prep"))
+        trial = _short_date(payload.get("trial_completed")) if payload.get("trial_completed") else ""
+        bridal_offer = _matched_offer(merchant, category, "spa", "skin", "bridal")
+        owner = merchant.get("identity", {}).get("owner_first_name", merchant_name)
         body = (
-            f"{greeting}, {merchant_name} here. {days} days to your wedding; "
-            f"this is a good window for {window}. "
-            f"Want me to block your preferred Saturday slot for the first session?"
+            f"{greeting}, {owner} from {merchant_name} here. "
+            f"{days} days to your wedding"
         )
+        if trial:
+            body += f", and your trial was on {trial}"
+        body += f"; this is the right window for {window}. "
+        body += f"Want me to block Saturday for {bridal_offer or 'the first bridal prep session'}?"
         return _result(
             body,
             "binary_yes_no",
             "merchant_on_behalf",
             suppression,
-            "Bridal follow-up uses wedding countdown and next-step window with a simple slot-hold ask.",
+            "Bridal follow-up uses wedding countdown, trial context, merchant owner voice, and a simple slot-hold ask.",
         )
 
     if kind == "chronic_refill_due":
@@ -397,9 +440,15 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
         if kind == "cde_opportunity":
             credits = payload.get("credits") or item.get("credits")
             fee = payload.get("fee") or item.get("actionable", "")
+            event_time = str(item.get("date") or trigger.get("expires_at") or "")
+            event_hint = ""
+            if event_time:
+                event_hint = f" on {_short_date(event_time)}"
+                if "T" in event_time and len(event_time.split("T", 1)[1]) >= 5:
+                    event_hint += f" at {event_time.split('T', 1)[1][:5]}"
             body = (
-                f"{name}, IDA/CDE item for this week: {title}. "
-                f"{credits or 2} credits; {str(fee).replace('_', ' ')}. Want me to save the details and draft a reminder?"
+                f"{name}, IDA/CDE item for this week{event_hint}: {title}. "
+                f"{credits or 2} credits; {str(fee).replace('_', ' ')}. Want a calendar note + 3-line patient-facing post?"
             )
         elif "radiograph" in title.lower() or kind == "regulation_change":
             deadline = payload.get("deadline_iso", "").split("T")[0] or "Dec 15"
@@ -444,17 +493,18 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
         peer = _peer_ctr(category)
         if kind == "seasonal_perf_dip" and payload.get("is_expected_seasonal"):
             members = aggregate.get("total_active_members")
+            verb = _metric_verb(metric)
             body = (
-                f"{name}, {metric} is down {_pct(delta)} this week, but Apr-Jun is a normal gym lull. "
+                f"{name}, {metric} {verb} down {_abs_pct(delta)} this week, but Apr-Jun is a normal gym lull. "
                 f"Skip extra ads; protect {members or 'current'} members with a summer attendance challenge. Want the draft?"
             )
         else:
             baseline = payload.get("vs_baseline")
-            verb = "are" if str(metric).endswith("s") else "is"
+            verb = _metric_verb(metric)
             if isinstance(delta, (int, float)) and delta > 0:
                 body = f"{name}, Vera flagged a {metric} dip, but latest data shows {_pct(delta, signed=True)}. Better not panic"
             else:
-                body = f"{name}, {metric} {verb} down {_pct(delta)} vs {payload.get('window', '7d')}"
+                body = f"{name}, {metric} {verb} down {_abs_pct(delta)} vs {payload.get('window', '7d')}"
             if baseline:
                 body += f" baseline {baseline}"
             if peer and perf.get("ctr"):
@@ -469,7 +519,7 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
             delta = perf.get("delta_7d", {}).get(f"{metric}_pct")
         driver = str(payload.get("likely_driver") or "recent activity").replace("_", " ")
         baseline = payload.get("vs_baseline") or perf.get(metric)
-        verb = "are" if str(metric).endswith("s") else "is"
+        verb = _metric_verb(metric)
         body = f"{name}, {metric} {verb} up {_pct(delta, signed=True)}"
         if baseline:
             body += f" vs baseline {baseline}"
@@ -495,7 +545,7 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
         signal = _humanize(merchant.get("signals", [""])[0] if merchant.get("signals") else "")
         clue = theme or signal or "this week's customer demand"
         body = (
-            f"{name}, quick check: is {clue} still the strongest demand at {_merchant_short_name(merchant)}? "
+            f"{name}, quick check: {clue}. Is that still the strongest demand at {_merchant_short_name(merchant)}? "
             "Reply with one service name; I will turn it into a Google post + 4-line WhatsApp reply."
         )
         return _result(body, "open_ended", "vera", suppression, "Curious-ask trigger invites merchant input and offers to convert it into useful copy.")
@@ -548,25 +598,59 @@ def _merchant_message(category: dict[str, Any], merchant: dict[str, Any], trigge
 
     if kind in {"renewal_due", "winback_eligible", "dormant_with_vera", "gbp_unverified"}:
         if kind == "renewal_due":
+            days = payload.get("days_remaining", merchant.get("subscription", {}).get("days_remaining"))
+            plan = payload.get("plan") or merchant.get("subscription", {}).get("plan") or "Pro"
+            amount = _money(payload.get("renewal_amount"))
+            calls_delta = perf.get("delta_7d", {}).get("calls_pct")
+            peer = _peer_ctr(category)
             body = (
-                f"{name}, Pro renewal is in {payload.get('days_remaining', merchant.get('subscription', {}).get('days_remaining'))} days. "
-                f"Before renewal, want me to show the 3 wins Vera created from your current profile data?"
+                f"{name}, {plan} renewal is in {days} days"
             )
+            if amount:
+                body += f" ({amount})"
+            if calls_delta is not None:
+                direction = "down" if isinstance(calls_delta, (int, float)) and calls_delta < 0 else "up"
+                body += f"; calls are {direction} {_abs_pct(calls_delta)}"
+            if peer and perf.get("ctr"):
+                body += f", CTR {perf.get('ctr')*100:.1f}% vs peer {peer*100:.1f}%"
+            body += ". Want a renewal decision note with the 3 fixes most likely to recover leads?"
         elif kind == "gbp_unverified":
+            uplift = payload.get("estimated_uplift_pct")
+            views = perf.get("views")
+            extra = round(views * uplift) if isinstance(views, (int, float)) and isinstance(uplift, (int, float)) else None
             body = (
                 f"{name}, your Google profile is still unverified in {_city_locality(merchant)}. "
-                f"Verification can lift visibility by about {_pct(payload.get('estimated_uplift_pct'))}. Want the postcard/phone steps?"
+                f"Verification can lift visibility by about {_pct(uplift)}"
             )
+            if extra:
+                body += f"; at {views} views/month, that is roughly {extra} extra profile views"
+            body += ". Want the postcard/phone steps?"
         elif kind == "winback_eligible":
-            body = (
-                f"{name}, since expiry {payload.get('days_since_expiry')} days ago, calls fell {_pct(payload.get('perf_dip_pct'))} "
-                f"and {payload.get('lapsed_customers_added_since_expiry')} more customers lapsed. Want a 7-day restart plan?"
-            )
+            days = payload.get("days_since_expiry")
+            lapsed = payload.get("lapsed_customers_added_since_expiry")
+            if cat == "salons":
+                body = (
+                    f"{name}, since expiry {days} days ago, booking calls slipped {_abs_pct(payload.get('perf_dip_pct'))} "
+                    f"and {lapsed} more clients moved into lapsed. Want a 7-day Aundh comeback post + WhatsApp?"
+                )
+            else:
+                body = (
+                    f"{name}, since expiry {days} days ago, calls fell {_abs_pct(payload.get('perf_dip_pct'))} "
+                    f"and {lapsed} more customers lapsed. Want a 7-day restart plan?"
+                )
         else:
+            days = payload.get("days_since_last_merchant_message", "many")
+            last_topic = payload.get("last_topic")
+            topic_note = f"{_humanize(last_topic)} note" if last_topic else "note"
+            anchor = _merchant_anchor(merchant, _active_offer(merchant, None))
+            task = "service-price comeback post" if cat == "salons" else "profile recovery task"
             body = (
-                f"{name}, it has been {payload.get('days_since_last_merchant_message', 'many')} days since we last spoke. "
-                f"I found one quick growth task for {_merchant_short_name(merchant)}. Want the 2-line version?"
+                f"{name}, it has been {days} days since our last {topic_note}. "
+                f"For {_merchant_short_name(merchant)}"
             )
+            if anchor:
+                body += f" ({anchor})"
+            body += f", the clean next step is one {task}. Want the 2-line version?"
         return _result(body, "open_ended", "vera", suppression, "Account-state trigger uses current account risk and asks for a low-effort next step.")
 
     metric = payload.get("metric_or_topic") or kind.replace("_", " ")
