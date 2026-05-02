@@ -39,43 +39,120 @@ def _build_deterministic(
     facts: dict[str, Any],
     fallback_key: str,
 ) -> dict[str, str]:
-    """Build a message from the BM25 template with name swapped.
-
-    For merchant-scoped templates: swap the greeting name with merchant name.
-    For customer-scoped templates: swap the greeting name with customer name
-    (if available) and DON'T touch it with the merchant name.
-    """
-    body = template.get("sample_message", "")
-    merchant_name = facts.get("merchant", {}).get("name", "")
-    customer_name = (facts.get("customer") or {}).get("name", "")
-    trigger_scope = facts.get("trigger", {}).get("scope", "merchant")
+    """Build a deterministic message from LIVE FACTS, using the template
+    only for structure (cta_type, send_as). Never copies sample_message
+    directly — that would leak hardcoded facts from other merchants."""
+    m = facts.get("merchant", {})
+    t = facts.get("trigger", {})
+    c = facts.get("customer")
+    trigger_scope = t.get("scope", "merchant")
     is_customer_scoped = trigger_scope == "customer" or template.get("scope") == "customer"
 
-    if "," in body:
-        parts = body.split(",", 1)
-        prefix = parts[0].strip()
-        if is_customer_scoped:
-            # Customer-scoped: the greeting name is the CUSTOMER
-            # Only swap if we have a customer name; otherwise leave as-is
-            if customer_name and (prefix.startswith("Hi ") or prefix.startswith("Namaste ")):
-                greeting = prefix.split(" ", 1)[0]
-                body = f"{greeting} {customer_name},{parts[1]}"
-            # else: leave the template's customer name as-is (better than wrong name)
-        else:
-            # Merchant-scoped: greeting name is the MERCHANT
-            if prefix.startswith("Hi ") or prefix.startswith("Namaste "):
-                greeting = prefix.split(" ", 1)[0]
-                body = f"{greeting} {merchant_name},{parts[1]}"
+    name = m.get("name", "Merchant")
+    full_name = m.get("full_name", name)
+    location = m.get("location", "")
+    offer = m.get("best_offer", "")
+    perf = m.get("performance", {})
+    peer = m.get("peer_comparison", {})
+    kind = t.get("kind", "")
+    payload = t.get("payload", {})
+
+    # Build body from live facts
+    if is_customer_scoped:
+        cust_name = c.get("name", "") if c else ""
+        greeting = f"Hi {cust_name}, {full_name}" if cust_name else f"Hi, {full_name}"
+        if location:
+            greeting += f" ({location})"
+        greeting += " here."
+        # Extract trigger-specific detail
+        detail = ""
+        if kind == "recall_due":
+            service = payload.get("service_due", "follow-up")
+            detail = f" Your {service} is due."
+        elif kind == "appointment_tomorrow":
+            detail = " Your appointment is tomorrow."
+        elif kind == "chronic_refill_due":
+            meds = ", ".join(payload.get("molecule_list", [])[:3])
+            date = str(payload.get("stock_runs_out_iso", "")).split("T")[0]
+            detail = f" Your {meds or 'medicine'} stock runs out on {date}."
+        elif kind in ("customer_lapsed_soft", "customer_lapsed_hard"):
+            days = payload.get("days_since_last_visit", "")
+            detail = f" It's been {days} days since your last visit." if days else ""
+        body = f"{greeting}{detail}"
+        if offer:
+            body += f" {offer} ready for you."
+        body += " Reply YES to confirm, or share another time."
+    else:
+        # Merchant-scoped: build from trigger kind
+        header = f"{name}, {full_name}"
+        if location:
+            header += f", {location}"
+        header += ":"
+
+        if "perf_dip" in kind:
+            metric = payload.get("metric", "calls")
+            delta = payload.get("delta_pct", "")
+            body = f"{header} {metric} down {delta}"
+            if perf.get("delta_7d"):
+                for k, v in perf["delta_7d"].items():
+                    if v and metric in k:
+                        body = f"{header} {metric} {v} in last 7d"
+                        break
+            if peer.get("merchant_ctr") and peer.get("peer_ctr"):
+                body += f"; CTR {peer['merchant_ctr']} vs peer {peer['peer_ctr']}"
+            body += "."
+            if offer:
+                body += f" Main {offer} ka post refresh kar doon?"
             else:
-                body = f"{merchant_name},{parts[1]}"
+                body += " Main ek fresh post draft kar doon?"
+            body += " YES/STOP"
+        elif "perf_spike" in kind:
+            metric = payload.get("metric", "calls")
+            delta = payload.get("delta_pct", "")
+            body = f"{header} {metric} up {delta} in last 7d. Want to double down with a fresh post? YES/STOP"
+        elif kind == "competitor_opened":
+            comp = payload.get("competitor_name", "a competitor")
+            dist = payload.get("distance_km", "")
+            body = f"{header} {comp} opened {dist}km away."
+            if offer:
+                body += f" Your {offer} + reviews is the counter."
+            body += " Want the draft? YES/STOP"
+        elif "festival" in kind or "seasonal" in kind or "ipl" in kind:
+            event = payload.get("festival", payload.get("match", kind.replace("_", " ")))
+            body = f"{header} {event} window is coming."
+            if offer:
+                body += f" Best move: one post around {offer}."
+            body += " Want the draft? YES/STOP"
+        elif "dormant" in kind or "winback" in kind:
+            days = payload.get("days_since_last_merchant_message", payload.get("days_since_expiry", ""))
+            body = f"{header} it's been {days} days."
+            if offer:
+                body += f" One recovery post around {offer} can help."
+            body += " Want the 2-line version? YES/STOP"
+        elif kind in ("research_digest", "regulation_change", "cde_opportunity"):
+            digest = t.get("digest_item", {})
+            title = digest.get("title", kind.replace("_", " "))
+            source = digest.get("source", "")
+            body = f"{header} {title}."
+            if source:
+                body += f" Source: {source}."
+            body += " Want me to pull the summary?"
+        elif kind == "milestone_reached":
+            metric = payload.get("metric", "reviews")
+            value = payload.get("value_now", "")
+            target = payload.get("milestone_value", "")
+            body = f"{header} at {value} {metric}, {target} is within reach. Want a review-request draft?"
+        else:
+            body = f"{header} {kind.replace('_', ' ')} signal. Want me to draft an action?"
 
     send_as = "merchant_on_behalf" if is_customer_scoped else template.get("send_as", "vera")
+    cta = template.get("cta_type", "binary_yes_no" if is_customer_scoped else "open_ended")
     return {
         "body": body,
-        "cta": template.get("cta_type", "open_ended"),
+        "cta": cta,
         "send_as": send_as,
         "suppression_key": fallback_key,
-        "rationale": "Deterministic template with name swap.",
+        "rationale": f"Deterministic fallback from live facts for {kind}.",
     }
 
 
@@ -204,7 +281,7 @@ async def _select_best(
 # Main compose entry point
 # ---------------------------------------------------------------------------
 
-async def compose(
+async def compose_async(
     category: dict[str, Any],
     merchant: dict[str, Any],
     trigger: dict[str, Any],
@@ -279,3 +356,16 @@ async def compose(
 
     # 8. Validate
     return finalize_message(raw, fallback_key=fallback_key)
+
+
+def compose(
+    category: dict[str, Any],
+    merchant: dict[str, Any],
+    trigger: dict[str, Any],
+    customer: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Sync wrapper for compose_async(). Used by tools/generate_submission.py
+    and the bot.py public contract. Do NOT call from inside FastAPI routes
+    (use compose_async there)."""
+    import asyncio
+    return asyncio.run(compose_async(category, merchant, trigger, customer))

@@ -59,7 +59,7 @@ Router: simple dict lookup `trigger.kind -> family` (~40 mapped kinds, unknown -
 | Intent-handoff failures | LLM classifies commit intent (handles Hindi "kar do", "haan", implicit yes). Prompt forbids re-qualifying after commit. |
 | Generic copy | Per-family prompts enforce service+price anchoring, Hindi-English code-mix, 2-3 layered compulsion levers. |
 | Low engagement frequency | LLM composes for any novel trigger kind via the fallback family. BM25 finds closest structural reference. |
-| Multi-turn cadence | Store tracks sends per merchant per 24h window. Max 5 messages/merchant/day. |
+| Multi-turn cadence | Store tracks sends per merchant per 24h window. Max 8 messages/merchant/day. |
 | Language detection | Per-turn detection (Hindi markers + Devanagari). Sticky per conversation — once Hindi detected, stays hi-en. Passed to system prompt. |
 | Knowing when to stop | Unanswered nudge counter per merchant. 3+ consecutive bot messages without merchant reply = stop nudging. |
 
