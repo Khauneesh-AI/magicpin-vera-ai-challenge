@@ -107,14 +107,11 @@ async def tick(body: TickBody) -> dict[str, Any]:
         if not category:
             continue
 
-        # --- Nudge check: don't send if 3+ unanswered ---
-        if store.should_stop_nudging(str(merchant_id)):
-            logger.info("Skipping %s — 3+ unanswered nudges", merchant_id)
-            continue
-
-        # --- Cadence check: max 5 messages per 24h per merchant ---
-        if store.get_sends_in_window(str(merchant_id), 24) >= 5:
-            logger.info("Skipping %s — cadence limit (5/24h)", merchant_id)
+        # --- Cadence check: max 8 messages per 24h per merchant ---
+        # (nudge check only applies to /v1/reply, not proactive ticks —
+        #  each trigger is a fresh conversation, not an unanswered follow-up)
+        if store.get_sends_in_window(str(merchant_id), 24) >= 8:
+            logger.info("Skipping %s — cadence limit (8/24h)", merchant_id)
             continue
 
         customer = None

@@ -126,17 +126,29 @@ async def _build_llm(
 
 _SELECTOR_SYSTEM = """\
 You are picking the BETTER WhatsApp message for a merchant engagement bot.
-Consider: specificity (concrete numbers/dates), trigger relevance (why NOW),
-category voice match, merchant personalization, and engagement compulsion.
-Return ONLY the JSON: {"pick": "A" or "B", "reason": "one sentence"}\
+
+Consider:
+1. Specificity (concrete numbers/dates from merchant data)
+2. Merchant fit (uses business name, locality, owner name — not just generic)
+3. NO hallucination (if a message cites an offer/price not in the merchant's active offers, that is WORSE)
+4. Trigger relevance (why NOW)
+5. Engagement (compulsion levers, clear CTA)
+
+IMPORTANT: A message that invents an offer the merchant doesn't have is WORSE than one that doesn't mention offers.
+
+Return ONLY: {"pick": "A" or "B", "reason": "one sentence"}\
 """
 
 
 def _build_selector_prompt(
     msg_a: str, msg_b: str, trigger_kind: str, category_slug: str,
-    merchant_name: str,
+    merchant_name: str, merchant_offers: list[str] | None = None,
+    merchant_location: str = "",
 ) -> str:
-    return f"""Trigger: {trigger_kind} | Category: {category_slug} | Merchant: {merchant_name}
+    offers_str = ", ".join(merchant_offers) if merchant_offers else "NONE (no active offers)"
+    return f"""Trigger: {trigger_kind} | Category: {category_slug}
+Merchant: {merchant_name} | Location: {merchant_location}
+Merchant active offers: {offers_str}
 
 Message A:
 "{msg_a}"
@@ -144,7 +156,7 @@ Message A:
 Message B:
 "{msg_b}"
 
-Which is better? Return JSON: {{"pick": "A" or "B", "reason": "..."}}"""
+Which is better? If a message cites an offer not in the active offers list, penalize it. Return JSON: {{"pick": "A" or "B", "reason": "..."}}"""
 
 
 class _Selection(BaseModel):
@@ -158,6 +170,8 @@ async def _select_best(
     trigger: dict[str, Any],
     category: dict[str, Any],
     merchant_name: str,
+    merchant_offers: list[str] | None = None,
+    merchant_location: str = "",
 ) -> str:
     """Ask LLM to pick A or B. Returns 'A' or 'B'. Defaults to 'A' on failure."""
     try:
@@ -166,7 +180,7 @@ async def _select_best(
         prompt = _build_selector_prompt(
             msg_a["body"], msg_b["body"],
             trigger.get("kind", ""), category.get("slug", ""),
-            merchant_name,
+            merchant_name, merchant_offers, merchant_location,
         )
         result = await _parse(
             model=config.CLASSIFY_MODEL,
@@ -244,6 +258,8 @@ async def compose(
         pick = await _select_best(
             msg_a, msg_b, trigger, category,
             merchant_name,
+            merchant_offers=facts["merchant"].get("active_offers"),
+            merchant_location=facts["merchant"].get("location", ""),
         )
         raw = msg_b if pick == "B" else msg_a
         route = "llm_compose" if pick == "B" else "deterministic"
