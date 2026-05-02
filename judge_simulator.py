@@ -174,12 +174,14 @@ class OpenAIProvider(LLMProvider):
         messages.append({"role": "user", "content": prompt})
 
         token_key = "max_completion_tokens" if "gpt-5" in self.model or "gpt-4.1" in self.model else "max_tokens"
-        body = json.dumps({
+        params = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.2,
-            token_key: 1500
-        }).encode("utf-8")
+            token_key: 1500,
+        }
+        if "gpt-5.5" not in self.model:
+            params["temperature"] = 0.1
+        body = json.dumps(params).encode("utf-8")
 
         req = urlrequest.Request(
             "https://api.openai.com/v1/chat/completions",
