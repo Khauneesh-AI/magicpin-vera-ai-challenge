@@ -1,5 +1,10 @@
+"""FastAPI routes — async with parallel LLM composition, cadence planning,
+nudge tracking, and per-turn language detection."""
+
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import time
 from typing import Any
@@ -8,21 +13,23 @@ from fastapi import APIRouter, Response
 
 from vera_bot import __version__, config
 from vera_bot.composer import compose
-from vera_bot.reply_handler import decide_reply, is_auto_reply
+from vera_bot.reply_handler import handle_reply, is_auto_reply_keyword
 from vera_bot.schemas import ContextBody, ReplyBody, TickBody
 from vera_bot.store import Store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 store = Store()
 STARTED_AT = time.time()
 
 
-def conversation_id(merchant_id: str, trigger_id: str, customer_id: str | None) -> str:
+def _conversation_id(merchant_id: str, trigger_id: str, customer_id: str | None) -> str:
     base = f"conv_{customer_id or merchant_id}_{trigger_id}"
     return re.sub(r"[^a-zA-Z0-9_]+", "_", base)[:120]
 
 
-def action_from_message(
+def _action_from_message(
     merchant: dict[str, Any],
     trigger: dict[str, Any],
     message: dict[str, str],
@@ -37,7 +44,7 @@ def action_from_message(
         customer_id = str(trigger.get("customer_id"))
     template_base = "merchant" if message["send_as"] == "merchant_on_behalf" else "vera"
     return {
-        "conversation_id": conversation_id(merchant_id, trigger_id, customer_id),
+        "conversation_id": _conversation_id(merchant_id, trigger_id, customer_id),
         "merchant_id": merchant_id,
         "customer_id": customer_id,
         "trigger_id": trigger_id,
@@ -45,6 +52,11 @@ def action_from_message(
         "template_params": [message["body"][:120]],
         **message,
     }
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("/healthz")
@@ -79,11 +91,10 @@ def push_context(body: ContextBody) -> dict[str, Any]:
 
 
 @router.post("/tick")
-def tick(body: TickBody) -> dict[str, Any]:
-    actions: list[dict[str, Any]] = []
-    for trigger_id in body.available_triggers:
-        if len(actions) >= config.MAX_ACTIONS_PER_TICK:
-            break
+async def tick(body: TickBody) -> dict[str, Any]:
+    pending: list[tuple[dict, dict, dict, dict | None]] = []
+
+    for trigger_id in body.available_triggers[:config.MAX_ACTIONS_PER_TICK]:
         trigger = store.get_payload("trigger", trigger_id)
         if not trigger:
             continue
@@ -95,6 +106,17 @@ def tick(body: TickBody) -> dict[str, Any]:
         category = store.get_payload("category", category_slug)
         if not category:
             continue
+
+        # --- Nudge check: don't send if 3+ unanswered ---
+        if store.should_stop_nudging(str(merchant_id)):
+            logger.info("Skipping %s — 3+ unanswered nudges", merchant_id)
+            continue
+
+        # --- Cadence check: max 5 messages per 24h per merchant ---
+        if store.get_sends_in_window(str(merchant_id), 24) >= 5:
+            logger.info("Skipping %s — cadence limit (5/24h)", merchant_id)
+            continue
+
         customer = None
         customer_id = trigger.get("customer_id")
         if customer_id:
@@ -102,36 +124,81 @@ def tick(body: TickBody) -> dict[str, Any]:
         suppression_key = str(trigger.get("suppression_key") or trigger_id)
         if store.was_sent(str(merchant_id), suppression_key):
             continue
-        message = compose(category, merchant, trigger, customer)
-        if store.seen_recent_body(str(merchant_id), message["body"]):
+        pending.append((category, merchant, trigger, customer))
+
+    if not pending:
+        return {"actions": []}
+
+    # Fire all LLM compositions in parallel
+    results = await asyncio.gather(
+        *[compose(cat, mer, trg, cust) for cat, mer, trg, cust in pending],
+        return_exceptions=True,
+    )
+
+    actions: list[dict[str, Any]] = []
+    for (cat, mer, trg, cust), result in zip(pending, results):
+        if isinstance(result, BaseException):
+            logger.error("Tick compose error: %s", result)
             continue
-        action = action_from_message(merchant, trigger, message, customer)
+        merchant_id = str(mer.get("merchant_id", ""))
+        if store.seen_recent_body(merchant_id, result["body"]):
+            continue
+        action = _action_from_message(mer, trg, result, cust)
         actions.append(action)
-        store.mark_sent(str(merchant_id), message["suppression_key"])
-        store.remember_body(str(merchant_id), message["body"])
+        store.mark_sent(merchant_id, result["suppression_key"])
+        store.remember_body(merchant_id, result["body"])
+        store.record_bot_send(merchant_id)
+        store.record_send_time(merchant_id)
         store.add_turn(
             action["conversation_id"],
-            {"from": "bot", "body": message["body"], "trigger_id": action["trigger_id"]},
+            {"from": "bot", "body": result["body"], "trigger_id": action["trigger_id"]},
         )
+
     return {"actions": actions}
 
 
 @router.post("/reply")
-def reply(body: ReplyBody) -> dict[str, Any]:
+async def reply(body: ReplyBody) -> dict[str, Any]:
     history = store.get_history(body.conversation_id)
     store.add_turn(
         body.conversation_id,
         {"from": body.from_role, "body": body.message, "turn_number": body.turn_number},
     )
-    merchant_auto_reply_count = 0
-    if body.merchant_id and is_auto_reply(body.message):
-        merchant_auto_reply_count = store.remember_auto_reply(body.merchant_id, body.message)
-    decision = decide_reply(
+
+    # --- Per-turn language detection ---
+    detected_lang = store.detect_and_store_language(body.conversation_id, body.message)
+
+    # --- Reset nudge counter on merchant reply ---
+    if body.merchant_id:
+        store.record_merchant_reply(body.merchant_id)
+
+    # Track auto-reply count per merchant
+    auto_reply_count = 0
+    if body.merchant_id and is_auto_reply_keyword(body.message):
+        auto_reply_count = store.remember_auto_reply(body.merchant_id, body.message)
+
+    # Load merchant context for reply composition
+    merchant_context = None
+    if body.merchant_id:
+        merchant_context = store.get_payload("merchant", body.merchant_id)
+
+    decision = await handle_reply(
         conversation_id=body.conversation_id,
         message=body.message,
         history=history[:-1],
-        merchant_auto_reply_count=merchant_auto_reply_count,
+        merchant_id=body.merchant_id,
+        merchant_context=merchant_context,
+        auto_reply_count=auto_reply_count,
+        detected_language=detected_lang,
     )
-    if decision["action"] == "send":
-        store.add_turn(body.conversation_id, {"from": "bot", "body": decision.get("body", "")})
+
+    if decision.get("action") == "send":
+        store.add_turn(
+            body.conversation_id,
+            {"from": "bot", "body": decision.get("body", "")},
+        )
+        # Track nudge for cadence
+        if body.merchant_id:
+            store.record_bot_send(body.merchant_id)
+
     return decision

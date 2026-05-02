@@ -1,0 +1,130 @@
+[
+  {
+    "id": "trg_phase3_001_weather_heatwave",
+    "kind": "weather_heatwave",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_006_southindiancafe_restaurant_bangalore",
+    "urgency": 3,
+    "suppression_key": "weather:heatwave:bangalore:2026-05",
+    "payload": {
+      "temp_celsius": 42,
+      "city": "Bangalore",
+      "duration_days": 3,
+      "demand_shift": "cold beverages +65%, ice cream +40%, hot food orders -15%"
+    }
+  },
+  {
+    "id": "trg_phase3_002_competitor_price_war",
+    "kind": "competitor_price_undercut",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_003_studio11_salon_hyderabad",
+    "urgency": 4,
+    "suppression_key": "competitor:price_war:m003:2026-05",
+    "payload": {
+      "competitor_name": "GreenTrends Salon",
+      "distance_km": 0.8,
+      "their_offer": "Haircut @ \u20b979 (was \u20b9149)",
+      "undercut_pct": 20,
+      "their_google_rating": 4.2
+    }
+  },
+  {
+    "id": "trg_phase3_003_staff_review_positive",
+    "kind": "staff_review_highlight",
+    "scope": "merchant",
+    "source": "internal",
+    "merchant_id": "m_001_drmeera_dentist_delhi",
+    "urgency": 1,
+    "suppression_key": "staff_review:m001:2026-W18",
+    "payload": {
+      "staff_name": "Dr. Meera",
+      "mentions_30d": 12,
+      "sentiment": "positive",
+      "top_phrases": [
+        "gentle",
+        "painless",
+        "explains well"
+      ],
+      "suggestion": "Feature in Google post to boost trust signals"
+    }
+  },
+  {
+    "id": "trg_phase3_004_local_event_closure",
+    "kind": "local_event_disruption",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_009_apollo_pharmacy_jaipur",
+    "urgency": 4,
+    "suppression_key": "local_event:road_closure:jaipur:2026-05",
+    "payload": {
+      "event": "Main road construction near Malviya Nagar",
+      "duration": "2 weeks",
+      "impact": "foot traffic expected to drop 30%",
+      "opportunity": "home delivery promotion window"
+    }
+  },
+  {
+    "id": "trg_phase3_005_trend_movement",
+    "kind": "category_trend_movement",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_008_zenyoga_gym_chennai",
+    "urgency": 2,
+    "suppression_key": "trend:prenatal_yoga:chennai:2026-05",
+    "payload": {
+      "query": "prenatal yoga Chennai",
+      "delta_yoy": "+72%",
+      "segment_age": "25-35",
+      "current_google_rank": "not ranking",
+      "opportunity": "Add prenatal yoga class to capture rising demand"
+    }
+  },
+  {
+    "id": "trg_phase3_006_new_digest_item",
+    "kind": "research_digest",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_002_bharat_dentist_mumbai",
+    "urgency": 2,
+    "suppression_key": "research:dentists:2026-W18",
+    "payload": {
+      "category": "dentists",
+      "top_item_id": "d_phase3_new_item"
+    }
+  },
+  {
+    "id": "trg_phase3_007_customer_birthday",
+    "kind": "customer_birthday_upcoming",
+    "scope": "customer",
+    "source": "internal",
+    "merchant_id": "m_003_studio11_salon_hyderabad",
+    "customer_id": "c_phase3_neha",
+    "urgency": 2,
+    "suppression_key": "birthday:c_phase3_neha:2026-05",
+    "payload": {
+      "birthday_date": "2026-05-08",
+      "days_until": 6,
+      "last_service": "Hair Spa",
+      "visits_total": 7,
+      "suggested_offer": "20% birthday discount on any service"
+    }
+  },
+  {
+    "id": "trg_phase3_008_google_algo_update",
+    "kind": "google_algorithm_update",
+    "scope": "merchant",
+    "source": "external",
+    "merchant_id": "m_007_powerhouse_gym_bangalore",
+    "urgency": 3,
+    "suppression_key": "google_algo:2026-05",
+    "payload": {
+      "update_name": "May 2026 Local Pack update",
+      "impact": "Businesses with >50 reviews and weekly posts now rank 2x higher in local pack",
+      "merchant_review_count": 89,
+      "merchant_post_frequency": "last post 18 days ago",
+      "action": "Post this week to maintain ranking"
+    }
+  }
+]

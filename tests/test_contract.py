@@ -1,59 +1,184 @@
+"""Contract and unit tests for the Vera bot v2 (hybrid BM25 + LLM).
+
+Tests that require LLM calls mock the OpenAI client. Tests for
+deterministic components (fact extraction, BM25, validation, store)
+run without mocks.
+"""
+
 from __future__ import annotations
 
 import json
 import unittest
 from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
-from vera_bot.composer import compose
-from tools.generate_submission import build_rows
+from vera_bot.fact_extractor import (
+    active_offer,
+    city_locality,
+    customer_name,
+    extract_all_facts,
+    find_digest_item,
+    first_name,
+    get_peer_comparison,
+)
+from vera_bot.llm_client import ComposedMessage, ReplyClassification
 from vera_bot.main import app
-from tools.validate_submission import REQUIRED, URL_RE, validate_rows
-from vera_bot import routes
-from vera_bot.reply_handler import decide_reply
-from vera_bot.schemas import ContextBody, ReplyBody
+from vera_bot.prompts import build_compose_system, build_compose_user
+from vera_bot.reply_handler import (
+    is_auto_reply_keyword,
+    is_exact_opt_out,
+    repeated_in_history,
+    _keyword_fallback,
+)
+from vera_bot.retrieval import TemplateIndex, index as global_index
+from vera_bot.schemas import ContextBody
 from vera_bot.store import Store
 from vera_bot.validators import finalize_message
+from vera_bot import routes
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPANDED = ROOT / "expanded"
 
 
 def load_context(scope: str, context_id: str) -> dict:
-    folder = {
-        "category": "categories",
-        "merchant": "merchants",
-        "trigger": "triggers",
-    }[scope]
+    folder = {"category": "categories", "merchant": "merchants", "trigger": "triggers", "customer": "customers"}[scope]
     return json.loads((EXPANDED / folder / f"{context_id}.json").read_text(encoding="utf-8"))
 
 
-class SubmissionContractTests(unittest.TestCase):
-    def test_generated_rows_match_contract(self) -> None:
-        rows = build_rows()
-        validate_rows(rows)
+# ---------------------------------------------------------------------------
+# Fact Extractor Tests
+# ---------------------------------------------------------------------------
 
-    def test_generated_rows_do_not_expose_mojibake(self) -> None:
-        bad_fragments = ("\u00e2", "\ufffd")
-        for row in build_rows():
-            body = row["body"]
-            self.assertFalse(
-                any(fragment in body for fragment in bad_fragments),
-                body,
-            )
-            self.assertNotIn("last your last update", body)
 
-    def test_deterministic_generation(self) -> None:
-        self.assertEqual(build_rows(), build_rows())
+class FactExtractorTests(unittest.TestCase):
+    def test_first_name_adds_dr_prefix_for_dentists(self) -> None:
+        merchant = {"identity": {"owner_first_name": "Meera"}, "category_slug": "dentists"}
+        self.assertEqual(first_name(merchant), "Dr. Meera")
 
-    def test_required_keys_are_expected(self) -> None:
-        self.assertEqual(
-            REQUIRED,
-            {"test_id", "body", "cta", "send_as", "suppression_key", "rationale"},
-        )
+    def test_first_name_no_prefix_for_restaurants(self) -> None:
+        merchant = {"identity": {"owner_first_name": "Suresh"}, "category_slug": "restaurants"}
+        self.assertEqual(first_name(merchant), "Suresh")
 
-    def test_url_regex_catches_urls(self) -> None:
-        self.assertIsNotNone(URL_RE.search("https://example.com"))
-        self.assertIsNotNone(URL_RE.search("www.example.com"))
+    def test_city_locality_both(self) -> None:
+        merchant = {"identity": {"locality": "Lajpat Nagar", "city": "Delhi"}}
+        self.assertEqual(city_locality(merchant), "Lajpat Nagar, Delhi")
+
+    def test_active_offer_picks_active(self) -> None:
+        merchant = {
+            "offers": [
+                {"title": "Expired Offer", "status": "expired"},
+                {"title": "Dental Cleaning @ ₹299", "status": "active"},
+            ]
+        }
+        self.assertEqual(active_offer(merchant), "Dental Cleaning @ ₹299")
+
+    def test_find_digest_item_by_id(self) -> None:
+        category = {"digest": [{"id": "d1", "title": "Item 1"}, {"id": "d2", "title": "Item 2"}]}
+        trigger = {"kind": "research_digest", "payload": {"top_item_id": "d2"}}
+        self.assertEqual(find_digest_item(category, trigger)["title"], "Item 2")
+
+    def test_customer_name_strips_parenthetical(self) -> None:
+        customer = {"identity": {"name": "Karthik (parent: Sumitra)"}}
+        self.assertEqual(customer_name(customer), "Karthik")
+
+    def test_peer_comparison_below(self) -> None:
+        merchant = {"performance": {"ctr": 0.021}}
+        category = {"peer_stats": {"avg_ctr": 0.030}}
+        result = get_peer_comparison(merchant, category)
+        self.assertEqual(result["ctr_vs_peer"], "below")
+
+    def test_extract_all_facts_has_required_keys(self) -> None:
+        cat = load_context("category", "dentists")
+        mer = load_context("merchant", "m_001_drmeera_dentist_delhi")
+        trg = load_context("trigger", "trg_001_research_digest_dentists")
+        facts = extract_all_facts(cat, mer, trg)
+        self.assertIn("merchant", facts)
+        self.assertIn("trigger", facts)
+        self.assertIn("customer", facts)
+        self.assertIn("category_slug", facts)
+        self.assertIn("category_voice", facts)
+        self.assertEqual(facts["merchant"]["name"], "Dr. Meera")
+
+
+# ---------------------------------------------------------------------------
+# BM25 Retrieval Tests
+# ---------------------------------------------------------------------------
+
+
+class RetrievalTests(unittest.TestCase):
+    def test_global_index_loaded(self) -> None:
+        self.assertGreater(len(global_index.entries), 20)
+
+    def test_query_returns_relevant_matches(self) -> None:
+        trigger = {"kind": "perf_dip", "payload": {"metric": "calls", "delta_pct": -0.5}}
+        category = {"slug": "dentists"}
+        matches = global_index.query(trigger, category, top_n=2)
+        self.assertEqual(len(matches), 2)
+        entry, score = matches[0]
+        self.assertIn("perf_dip", entry["trigger_kind"])
+        self.assertGreater(score, 0)
+
+    def test_customer_trigger_retrieves_customer_scope(self) -> None:
+        trigger = {"kind": "recall_due", "scope": "customer", "payload": {"service_due": "cleaning"}}
+        category = {"slug": "dentists"}
+        matches = global_index.query(trigger, category, top_n=2)
+        self.assertTrue(any(entry["scope"] == "customer" for entry, _ in matches))
+
+
+# ---------------------------------------------------------------------------
+# Prompts Tests
+# ---------------------------------------------------------------------------
+
+
+class PromptsTests(unittest.TestCase):
+    def test_compose_system_includes_voice(self) -> None:
+        category = {
+            "slug": "dentists",
+            "voice": {
+                "tone": "peer_clinical",
+                "vocab_allowed": ["fluoride", "caries"],
+                "vocab_taboo": ["guaranteed"],
+            },
+        }
+        prompt = build_compose_system(category)
+        self.assertIn("peer_clinical", prompt)
+        self.assertIn("fluoride", prompt)
+        self.assertIn("guaranteed", prompt)
+
+    def test_compose_user_polish_mode_includes_draft(self) -> None:
+        facts = {
+            "merchant": {"name": "Dr. Test", "location": "Delhi", "languages": ["en", "hi"]},
+            "trigger": {"kind": "perf_dip", "urgency": 3, "scope": "merchant",
+                        "suppression_key": "test:key", "payload": {}},
+            "customer": None,
+        }
+        trigger = {"kind": "perf_dip", "payload": {"metric": "calls"}}
+        templates = [({"trigger_kind": "perf_dip", "category": "dentists",
+                       "sample_message": "Test message", "cta_type": "binary_yes_no",
+                       "send_as": "vera", "compulsion_levers": ["specificity"]}, 10.0)]
+        prompt = build_compose_user(facts, trigger, templates, mode="polish", draft_body="Draft body here")
+        self.assertIn("Draft body here", prompt)
+        self.assertIn("DRAFT MESSAGE", prompt)
+
+    def test_compose_user_compose_mode_includes_facts(self) -> None:
+        facts = {
+            "merchant": {"name": "Dr. Test", "location": "Delhi"},
+            "trigger": {"kind": "novel_trigger", "urgency": 2, "scope": "merchant", "payload": {}},
+            "customer": None,
+        }
+        trigger = {"kind": "novel_trigger", "payload": {"metric": "calls"}}
+        templates = [({"trigger_kind": "perf_dip", "sample_message": "Ref msg",
+                       "cta_type": "open_ended", "send_as": "vera"}, 2.0)]
+        prompt = build_compose_user(facts, trigger, templates, mode="compose")
+        self.assertIn("Dr. Test", prompt)
+        self.assertIn("Ref msg", prompt)
+        self.assertIn("novel_trigger", prompt)
+
+
+# ---------------------------------------------------------------------------
+# Store Tests
+# ---------------------------------------------------------------------------
 
 
 class StoreTests(unittest.TestCase):
@@ -73,6 +198,63 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(store.was_sent("m2", "same-key"))
 
 
+# ---------------------------------------------------------------------------
+# Validator Tests
+# ---------------------------------------------------------------------------
+
+
+class StoreNewFeaturesTests(unittest.TestCase):
+    def test_unanswered_nudge_counter(self) -> None:
+        store = Store()
+        store.record_bot_send("m1")
+        store.record_bot_send("m1")
+        self.assertEqual(store.get_unanswered_count("m1"), 2)
+        self.assertFalse(store.should_stop_nudging("m1"))
+        store.record_bot_send("m1")
+        self.assertTrue(store.should_stop_nudging("m1"))
+        store.record_merchant_reply("m1")
+        self.assertEqual(store.get_unanswered_count("m1"), 0)
+        self.assertFalse(store.should_stop_nudging("m1"))
+
+    def test_language_detection_english(self) -> None:
+        from vera_bot.store import detect_language
+        self.assertEqual(detect_language("Yes, go ahead with the post"), "en")
+
+    def test_language_detection_hindi(self) -> None:
+        from vera_bot.store import detect_language
+        self.assertEqual(detect_language("Haan chalega kar do"), "hi-en")
+
+    def test_language_detection_devanagari(self) -> None:
+        from vera_bot.store import detect_language
+        self.assertEqual(detect_language("धन्यवाद, आगे बढ़ो"), "hi")
+
+    def test_conversation_language_sticky(self) -> None:
+        store = Store()
+        store.detect_and_store_language("c1", "Yes do it")
+        self.assertEqual(store.get_conversation_language("c1"), "en")
+        store.detect_and_store_language("c1", "haan kar do bhai")
+        self.assertEqual(store.get_conversation_language("c1"), "hi-en")
+        # Once Hindi detected, stays hi-en even if next message is English
+        store.detect_and_store_language("c1", "Ok proceed")
+        self.assertEqual(store.get_conversation_language("c1"), "hi-en")
+
+    def test_cadence_tracking(self) -> None:
+        store = Store()
+        store.record_send_time("m1")
+        store.record_send_time("m1")
+        self.assertEqual(store.get_sends_in_window("m1", 24), 2)
+
+    def test_prompt_family_routing(self) -> None:
+        from vera_bot.prompts import get_trigger_family
+        self.assertEqual(get_trigger_family("research_digest"), "knowledge")
+        self.assertEqual(get_trigger_family("perf_dip"), "performance")
+        self.assertEqual(get_trigger_family("recall_due"), "customer")
+        self.assertEqual(get_trigger_family("festival_upcoming"), "event")
+        self.assertEqual(get_trigger_family("milestone_reached"), "social")
+        self.assertEqual(get_trigger_family("dormant_with_vera"), "account")
+        self.assertEqual(get_trigger_family("totally_new_trigger"), "fallback")
+
+
 class ValidatorTests(unittest.TestCase):
     def test_finalize_strips_urls_and_none(self) -> None:
         msg = {
@@ -89,11 +271,58 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(out["suppression_key"], "fallback:key")
 
 
+# ---------------------------------------------------------------------------
+# Reply Handler Tests (Tier 1 only — no LLM)
+# ---------------------------------------------------------------------------
+
+
+class ReplyHandlerTier1Tests(unittest.TestCase):
+    def test_auto_reply_keyword_detection(self) -> None:
+        self.assertTrue(is_auto_reply_keyword("Thank you for contacting us"))
+        self.assertTrue(is_auto_reply_keyword("Aapki jaankari ke liye shukriya"))
+        self.assertFalse(is_auto_reply_keyword("Yes, go ahead"))
+
+    def test_exact_opt_out(self) -> None:
+        self.assertTrue(is_exact_opt_out("stop"))
+        self.assertTrue(is_exact_opt_out("unsubscribe"))
+        self.assertFalse(is_exact_opt_out("not interested"))
+
+    def test_repeated_in_history(self) -> None:
+        msg = "Thank you for contacting us"
+        history = [
+            {"from": "merchant", "body": msg},
+            {"from": "bot", "body": "response"},
+            {"from": "merchant", "body": msg},
+            {"from": "merchant", "body": msg},
+        ]
+        self.assertTrue(repeated_in_history(msg, history, threshold=3))
+
+    def test_keyword_fallback_commit(self) -> None:
+        result = _keyword_fallback("ok go ahead", [])
+        self.assertEqual(result["action"], "send")
+        self.assertIn("commit", result["rationale"].lower())
+
+    def test_keyword_fallback_hostile(self) -> None:
+        result = _keyword_fallback("stop", [])
+        self.assertEqual(result["action"], "end")
+
+    def test_keyword_fallback_off_topic(self) -> None:
+        result = _keyword_fallback("can you help with GST filing?", [])
+        self.assertEqual(result["action"], "send")
+        self.assertIn("off-topic", result["rationale"].lower())
+
+
+# ---------------------------------------------------------------------------
+# API Endpoint Tests
+# ---------------------------------------------------------------------------
+
+
 class ApiTests(unittest.TestCase):
     def test_health_and_metadata(self) -> None:
         self.assertEqual(routes.healthz()["status"], "ok")
-        metadata = routes.metadata()
-        self.assertEqual(metadata["model"], "deterministic-no-llm")
+        meta = routes.metadata()
+        self.assertIn("compose + classify", meta["model"])
+        self.assertEqual(meta["approach"], "hybrid-bm25-retrieval-plus-llm-composer")
 
     def test_health_accepts_head_for_monitors(self) -> None:
         methods = {
@@ -123,208 +352,6 @@ class ApiTests(unittest.TestCase):
         response = routes.push_context(stale)
         self.assertFalse(response["accepted"])
         self.assertEqual(response["reason"], "stale_version")
-
-
-class CustomerFallbackQualityTests(unittest.TestCase):
-    def compose_without_customer(self, trigger_id: str) -> dict[str, str]:
-        trigger = load_context("trigger", trigger_id)
-        merchant = load_context("merchant", trigger["merchant_id"])
-        category = load_context("category", merchant["category_slug"])
-        return compose(category, merchant, trigger, customer=None)
-
-    def assert_payload_aware_customer_fallback(
-        self,
-        trigger_id: str,
-        required_terms: tuple[str, ...],
-    ) -> None:
-        msg = self.compose_without_customer(trigger_id)
-        body = msg["body"].lower()
-        self.assertNotIn("customer trigger", body)
-        self.assertEqual(msg["send_as"], "merchant_on_behalf")
-        for term in required_terms:
-            self.assertIn(term.lower(), body)
-
-    def test_recall_fallback_uses_service_and_slot(self) -> None:
-        self.assert_payload_aware_customer_fallback(
-            "trg_003_recall_due_priya",
-            ("6-month cleaning", "Wed 5 Nov"),
-        )
-
-    def test_bridal_fallback_uses_wedding_countdown(self) -> None:
-        self.assert_payload_aware_customer_fallback(
-            "trg_007_bridal_followup_kavya",
-            ("196", "skin prep"),
-        )
-
-    def test_gym_lapsed_fallback_uses_days_and_focus(self) -> None:
-        self.assert_payload_aware_customer_fallback(
-            "trg_015_winback_rashmi",
-            ("57 days", "weight loss"),
-        )
-
-    def test_trial_fallback_uses_trial_and_next_slot(self) -> None:
-        self.assert_payload_aware_customer_fallback(
-            "trg_017_kids_yoga_trial_followup_karthik",
-            ("22 Apr", "Sat 3 May"),
-        )
-
-    def test_refill_fallback_uses_meds_and_runout_date(self) -> None:
-        self.assert_payload_aware_customer_fallback(
-            "trg_019_chronic_refill_grandfather",
-            ("metformin", "2026-04-28"),
-        )
-
-
-class GeneralizationQualityTests(unittest.TestCase):
-    def test_unknown_merchant_trigger_summarizes_payload_and_context(self) -> None:
-        category = {
-            "slug": "restaurants",
-            "display_name": "Restaurants",
-        }
-        merchant = {
-            "merchant_id": "m_synthetic_cafe",
-            "category_slug": "restaurants",
-            "identity": {
-                "name": "Test Cafe",
-                "owner_first_name": "Asha",
-                "locality": "Indiranagar",
-                "city": "Bangalore",
-            },
-            "performance": {"views": 4200, "calls": 31, "ctr": 0.034},
-            "offers": [{"title": "Lunch Combo @ Rs199", "status": "active"}],
-        }
-        trigger = {
-            "id": "trg_synthetic",
-            "kind": "new_local_signal",
-            "payload": {
-                "search_query": "family lunch near me",
-                "delta_yoy": 0.41,
-                "window": "7d",
-            },
-        }
-        msg = compose(category, merchant, trigger)
-        body = msg["body"].lower()
-        for term in ("asha", "indiranagar", "4200", "31", "lunch combo", "family lunch near me", "41%"):
-            self.assertIn(term, body)
-        self.assertNotIn("metric_or_topic", body)
-
-    def test_curious_ask_uses_review_or_signal_when_available(self) -> None:
-        category = {"slug": "salons", "display_name": "Salons"}
-        merchant = {
-            "merchant_id": "m_synthetic_salon",
-            "category_slug": "salons",
-            "identity": {"name": "Glow Room", "owner_first_name": "Naina"},
-            "review_themes": [
-                {"theme": "hair spa", "sentiment": "pos", "occurrences_30d": 9},
-            ],
-            "signals": ["weekday_afternoon_gap"],
-        }
-        trigger = {"id": "ask_synthetic", "kind": "curious_ask_due", "payload": {}}
-        msg = compose(category, merchant, trigger)
-        body = msg["body"].lower()
-        self.assertIn("hair spa", body)
-        self.assertIn("9", body)
-        self.assertIn("google post", body)
-        self.assertIn("9 reviews mention hair spa", body)
-
-    def test_customer_greeting_strips_parenthetical_notes(self) -> None:
-        category = {"slug": "gyms", "display_name": "Gyms"}
-        merchant = {
-            "merchant_id": "m_synthetic_gym",
-            "category_slug": "gyms",
-            "identity": {"name": "Zen Test Gym", "owner_first_name": "Padma"},
-        }
-        trigger = {
-            "id": "trial_synthetic",
-            "kind": "trial_followup",
-            "payload": {
-                "trial_date": "2026-04-22",
-                "next_session_options": [{"label": "Sat 3 May, 8am"}],
-            },
-        }
-        customer = {"identity": {"name": "Karthik (parent: Sumitra)"}}
-        msg = compose(category, merchant, trigger, customer)
-        body = msg["body"]
-        self.assertIn("Hi Karthik,", body)
-        self.assertNotIn("parent:", body)
-        self.assertIn("22 Apr", body)
-
-    def test_seasonal_perf_dip_uses_plural_metric_grammar(self) -> None:
-        category = {"slug": "gyms", "display_name": "Gyms"}
-        merchant = {
-            "merchant_id": "m_synthetic_gym",
-            "category_slug": "gyms",
-            "identity": {"name": "Peak Fitness", "owner_first_name": "Riya"},
-            "customer_aggregate": {"total_active_members": 130},
-        }
-        trigger = {
-            "id": "seasonal_synthetic",
-            "kind": "seasonal_perf_dip",
-            "payload": {
-                "metric": "views",
-                "delta_pct": -0.2,
-                "is_expected_seasonal": True,
-            },
-        }
-        msg = compose(category, merchant, trigger)
-        self.assertIn("views are down", msg["body"])
-
-    def test_salon_festival_uses_immediate_bridal_window(self) -> None:
-        trigger = load_context("trigger", "trg_006_festival_diwali")
-        merchant = load_context("merchant", trigger["merchant_id"])
-        category = load_context("category", merchant["category_slug"])
-        msg = compose(category, merchant, trigger)
-        body = msg["body"].lower()
-        self.assertIn("april-may", body)
-        self.assertIn("bridal", body)
-        self.assertIn("2-month", body)
-        self.assertNotIn("188 days away", body)
-
-    def test_weekend_ipl_avoids_weeknight_offer_mismatch(self) -> None:
-        trigger = load_context("trigger", "trg_010_ipl_match_delhi")
-        merchant = load_context("merchant", trigger["merchant_id"])
-        category = load_context("category", merchant["category_slug"])
-        msg = compose(category, merchant, trigger)
-        body = msg["body"].lower()
-        self.assertIn("home-watch", body)
-        self.assertIn("delivery", body)
-        self.assertNotIn("not weeknight", body)
-        self.assertNotIn("tue-thu", body)
-
-
-class ReplyHandlerTests(unittest.TestCase):
-    def test_auto_reply_waits_or_ends(self) -> None:
-        decision = decide_reply(
-            conversation_id="c1",
-            message="Aapki jaankari ke liye bahut-bahut shukriya",
-            history=[],
-        )
-        self.assertIn(decision["action"], {"send", "wait", "end"})
-        self.assertIn("auto", decision["rationale"].lower())
-
-    def test_explicit_commit_sends_action_confirmation(self) -> None:
-        decision = decide_reply(conversation_id="c2", message="ok go ahead", history=[])
-        self.assertEqual(decision["action"], "send")
-        self.assertIn("commit", decision["rationale"].lower())
-
-    def test_repeated_auto_reply_ends_across_conversations_for_same_merchant(self) -> None:
-        original_store = routes.store
-        routes.store = Store()
-        try:
-            actions = []
-            for index in range(1, 5):
-                decision = routes.reply(
-                    ReplyBody(
-                        conversation_id=f"auto-repeat-{index}",
-                        merchant_id="merchant-auto-repeat",
-                        message="Thank you for contacting us! Our team will respond shortly.",
-                        turn_number=index,
-                    )
-                )
-                actions.append(decision["action"])
-            self.assertIn("end", actions)
-        finally:
-            routes.store = original_store
 
 
 if __name__ == "__main__":

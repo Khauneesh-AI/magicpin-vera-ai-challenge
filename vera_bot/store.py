@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,31 @@ def body_hash(body: str) -> str:
     return sha1(body.strip().lower().encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Per-turn language detection
+# ---------------------------------------------------------------------------
+
+_HINDI_MARKERS = (
+    "aapka", "aapke", "aapki", "hai", "hain", "kya", "kar", "karo",
+    "ke liye", "ka kaam", "nahi", "haan", "chalega", "kar do",
+    "se", "me", "mein", "ke", "ki", "ko", "pe", "bhi", "abhi",
+    "shukriya", "dhanyavaad", "namaste", "ji",
+)
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097f]")
+
+
+def detect_language(text: str) -> str:
+    """Detect if text is Hindi, English, or Hindi-English mix."""
+    if _DEVANAGARI_RE.search(text):
+        return "hi"
+    lowered = text.lower()
+    hindi_count = sum(1 for marker in _HINDI_MARKERS if marker in lowered)
+    word_count = max(1, len(lowered.split()))
+    if hindi_count >= 3 or hindi_count / word_count > 0.2:
+        return "hi-en"
+    return "en"
+
+
 @dataclass
 class StoredContext:
     version: int
@@ -31,6 +57,12 @@ class Store:
     sent_suppressions: set[tuple[str, str]] = field(default_factory=set)
     recent_bodies: dict[str, deque[str]] = field(default_factory=dict)
     auto_reply_hashes: dict[str, list[str]] = field(default_factory=dict)
+    # Unanswered nudge counter: merchant_id -> consecutive bot messages without merchant reply
+    unanswered_nudges: dict[str, int] = field(default_factory=dict)
+    # Cadence tracker: merchant_id -> list of send timestamps (ISO strings)
+    send_cadence: dict[str, list[str]] = field(default_factory=dict)
+    # Per-conversation detected language
+    conversation_language: dict[str, str] = field(default_factory=dict)
 
     def push_context(
         self,
@@ -102,3 +134,63 @@ class Store:
 
     def get_history(self, conversation_id: str) -> list[dict[str, Any]]:
         return self.conversations.setdefault(conversation_id, [])
+
+    # --- Unanswered nudge tracking ---
+
+    def record_bot_send(self, merchant_id: str) -> None:
+        """Increment unanswered nudge count for a merchant."""
+        self.unanswered_nudges[merchant_id] = self.unanswered_nudges.get(merchant_id, 0) + 1
+
+    def record_merchant_reply(self, merchant_id: str) -> None:
+        """Reset unanswered nudge count when merchant replies."""
+        self.unanswered_nudges[merchant_id] = 0
+
+    def get_unanswered_count(self, merchant_id: str) -> int:
+        return self.unanswered_nudges.get(merchant_id, 0)
+
+    def should_stop_nudging(self, merchant_id: str) -> bool:
+        """Return True if merchant has 3+ unanswered nudges."""
+        return self.get_unanswered_count(merchant_id) >= 3
+
+    # --- Cadence tracking ---
+
+    def record_send_time(self, merchant_id: str) -> None:
+        """Record that we sent a message to this merchant now."""
+        times = self.send_cadence.setdefault(merchant_id, [])
+        times.append(utc_now_iso())
+        # Keep last 10 timestamps
+        del times[:-10]
+
+    def get_sends_in_window(self, merchant_id: str, window_hours: int = 24) -> int:
+        """Count how many messages we sent to this merchant in the last N hours."""
+        times = self.send_cadence.get(merchant_id, [])
+        if not times:
+            return 0
+        now = datetime.now(timezone.utc)
+        count = 0
+        for ts in reversed(times):
+            try:
+                dt = datetime.fromisoformat(ts)
+                if (now - dt).total_seconds() <= window_hours * 3600:
+                    count += 1
+                else:
+                    break
+            except (ValueError, TypeError):
+                continue
+        return count
+
+    # --- Per-conversation language detection ---
+
+    def detect_and_store_language(self, conversation_id: str, message: str) -> str:
+        """Detect language of a message and store it for this conversation."""
+        lang = detect_language(message)
+        # Upgrade: if we detect Hindi in any turn, the conversation is hi-en
+        current = self.conversation_language.get(conversation_id, "en")
+        if lang in ("hi", "hi-en") or current in ("hi", "hi-en"):
+            self.conversation_language[conversation_id] = "hi-en"
+        else:
+            self.conversation_language[conversation_id] = lang
+        return self.conversation_language[conversation_id]
+
+    def get_conversation_language(self, conversation_id: str) -> str:
+        return self.conversation_language.get(conversation_id, "en")
