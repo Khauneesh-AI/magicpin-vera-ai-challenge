@@ -301,10 +301,11 @@ def _build_merchant_brief(facts: dict[str, Any]) -> str:
     agg = m.get("customer_aggregate", {})
     sub = m.get("subscription", {})
 
-    lines = [f"You are messaging {name}, who runs {full_name}"]
+    lines = [f"You are messaging {name} (address them by name), who runs {full_name}"]
     if location:
         lines[0] += f" in {location}"
     lines[0] += f". Language: {lang_str}."
+    lines.append(f"Use in your message: owner name \"{name}\", business name \"{full_name}\", locality \"{location}\".")
 
     # Performance line
     perf_parts = []
@@ -335,6 +336,8 @@ def _build_merchant_brief(facts: dict[str, Any]) -> str:
     # Offers
     if offers:
         lines.append(f"Active offers: {', '.join(offers[:3])}.")
+    else:
+        lines.append("Active offers: NONE — do not invent offers. Suggest creating one instead.")
 
     # Subscription
     if sub.get("status") and sub.get("days_remaining") is not None:

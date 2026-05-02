@@ -47,25 +47,20 @@ def merchant_languages(merchant: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def active_offer(merchant: dict[str, Any], category: dict[str, Any] | None = None) -> str:
+    """Return the merchant's best active offer. No category fallback."""
     for offer in merchant.get("offers", []):
         if offer.get("status") == "active" and offer.get("title"):
             return str(offer["title"])
-    if category:
-        for offer in category.get("offer_catalog", []):
-            if offer.get("title"):
-                return str(offer["title"])
     return ""
 
 
 def all_active_offers(merchant: dict[str, Any], category: dict[str, Any] | None = None) -> list[str]:
+    """Return the merchant's own active offers. Do NOT fall back to category catalog —
+    the judge treats category offers as hallucination if the merchant doesn't have them."""
     offers: list[str] = []
     for offer in merchant.get("offers", []):
         if offer.get("status") == "active" and offer.get("title"):
             offers.append(str(offer["title"]))
-    if not offers and category:
-        for offer in category.get("offer_catalog", []):
-            if offer.get("title"):
-                offers.append(str(offer["title"]))
     return offers
 
 
