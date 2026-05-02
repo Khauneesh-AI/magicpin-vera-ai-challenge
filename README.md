@@ -65,74 +65,36 @@ Router: simple dict lookup `trigger.kind -> family` (~40 mapped kinds, unknown -
 
 ## Evaluation Results
 
-### Judge Simulator — Apples-to-Apples (gpt-5.4 judge, same conditions)
+### Judge Simulator (gpt-5.4 judge)
 
-Both v1 (deterministic) and v2 (hybrid) were scored by the same `judge_simulator.py` with `LLM_MODEL=gpt-5.4`:
+```bash
+BOT_URL=http://localhost:8080 LLM_MODEL=gpt-5.4 TEST_SCENARIO=full_evaluation python judge_simulator.py
+```
 
-| Metric | v1 Deterministic | v2 Hybrid | Delta |
-|---|---|---|---|
-| **Average score** | **37/50 (74%)** | **38.7/50 (77%)** | **+1.7** |
-| Avg Specificity | 8 | 7 | -1 |
-| Avg Category Fit | 7 | 8 | +1 |
-| Avg Merchant Fit | 7 | 7 | 0 |
-| Avg Decision Quality | 8 | 8 | 0 |
-| Avg Engagement | 7 | 7 | 0 |
-| Auto-reply turns to exit | 3 | **1** | -2 turns |
-| Messages scored | 25 | 23 | — |
+| Dimension | Score |
+|---|---|
+| Avg Specificity | 7/10 |
+| Avg Category Fit | 8/10 |
+| Avg Merchant Fit | 7/10 |
+| Avg Decision Quality | 8/10 |
+| Avg Engagement | 7/10 |
+| **Average** | **38.7/50 (77%)** |
 
-The judge simulator scores one bot at a time, so there is inherent variance between runs (different LLM judge calls). To get a controlled comparison, we built a dedicated A/B evaluator.
-
-### A/B Controlled Evaluation (same judge, same call, gpt-5.4)
-
-Both messages (v1 and v2) are sent to the same judge in a single LLM call, eliminating judge variance. Run with `tools/evaluate_ab.py`.
-
-**Known Triggers (12 base test pairs):**
-
-| Metric | v1 Deterministic | v2 Hybrid | Delta |
-|---|---|---|---|
-| Average score | 33.5/50 | **37.9/50** | **+4.4** |
-| Win/Loss | — | **8W / 0L / 4T** | — |
-
-**Novel Triggers (8 simulated Phase 3 injections):**
-
-| Metric | v1 Deterministic | v2 Hybrid | Delta |
-|---|---|---|---|
-| Average score | 23.9/50 | **39.8/50** | **+15.9** |
-| Win/Loss | — | **8W / 0L / 0T** | — |
-
-**Overall (20 triggers):**
-
-| Metric | v1 Deterministic | v2 Hybrid | Delta |
-|---|---|---|---|
-| Average score | 30.2/50 | **40.6/50** | **+10.4** |
-| Win/Loss | — | **16W / 0L / 4T** | — |
-
-### Why Two Evaluation Methods?
-
-The **judge simulator** (`judge_simulator.py`) is the challenge's official evaluation tool. It scores one bot per run. But because each run makes separate LLM judge calls, scores vary by 3-5 points between runs (judge LLM temperature, prompt order effects). This makes it hard to compare two bots reliably.
-
-The **A/B evaluator** (`tools/evaluate_ab.py`) solves this by sending both messages to the same judge call. The judge sees Message A (deterministic) and Message B (hybrid) side by side, scored in one atomic call. This eliminates judge variance and produces a reliable delta.
-
-Both tools use the same gpt-5.4 judge model for consistency.
-
-### Judge Simulator — All Scenarios (both versions pass)
-
-| Scenario | v1 Deterministic | v2 Hybrid |
-|---|---|---|
-| Warmup (healthz, metadata, context push) | PASS | PASS |
-| Auto-reply detection | PASS (3 turns) | PASS (**1 turn**) |
-| Intent transition ("Ok lets do it") | PASS | PASS |
-| Hostile handling ("Stop messaging me") | PASS | PASS |
+| Scenario | Result |
+|---|---|
+| Warmup (healthz, metadata, context push) | PASS |
+| Auto-reply detection | PASS — ended in **1 turn** |
+| Intent transition ("Ok lets do it") | PASS — switched to action mode |
+| Hostile handling ("Stop messaging me") | PASS — ended immediately |
 
 ### Models Used
 
-| Role | Model | Purpose |
-|---|---|---|
-| Bot composer | gpt-5.4-mini | Message composition (LLM path) |
-| Bot classifier | gpt-5.4-mini | Reply intent classification |
-| Bot selector | gpt-5.4-mini | Pick best of deterministic vs LLM |
-| Judge (A/B eval) | gpt-5.4 | Controlled A/B scoring in `tools/evaluate_ab.py` |
-| Judge (simulator) | gpt-5.4 | Official simulator scoring |
+| Role | Model |
+|---|---|
+| Bot (compose + classify + select) | gpt-5.4-mini |
+| Judge (simulator) | gpt-5.4 |
+
+For detailed comparative analysis (v1 deterministic vs v2 hybrid, A/B controlled evaluation, architecture iteration history), see [docs/evaluation-analysis.md](docs/evaluation-analysis.md).
 
 ## Tech Stack
 
