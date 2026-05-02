@@ -139,11 +139,15 @@ async def handle_reply(
     When action is "send", also includes "body", "cta", "rationale".
     """
 
+    from vera_bot import config
+
     # ---- Tier 1: Deterministic fast-path ----
     if auto_reply_count >= 3 or repeated_in_history(message, history):
+        logger.info("[REPLY] %s | tier=keyword | intent=auto_reply_loop | action=end", conversation_id)
         return {"action": "end", "rationale": "Auto-reply loop detected; exiting."}
 
     if is_exact_opt_out(message):
+        logger.info("[REPLY] %s | tier=keyword | intent=opt_out | action=end", conversation_id)
         return {"action": "end", "rationale": "Explicit opt-out."}
 
     # ---- Tier 2: LLM classification ----
@@ -153,11 +157,12 @@ async def handle_reply(
             _CLASSIFY_SYSTEM, classify_user
         )
     except Exception:
-        logger.warning("LLM classify failed, using keyword fallback", exc_info=True)
+        logger.warning("[REPLY] %s | tier=keyword_fallback | reason=LLM failed | model=%s", conversation_id, config.CLASSIFY_MODEL, exc_info=True)
         return _keyword_fallback(message, history)
 
     intent = classification.intent
     action = classification.action
+    logger.info("[REPLY] %s | tier=llm | intent=%s | action=%s | model=%s | msg=%s", conversation_id, intent, action, config.CLASSIFY_MODEL, message[:60])
 
     # Auto-reply routing
     if intent == "auto_reply":

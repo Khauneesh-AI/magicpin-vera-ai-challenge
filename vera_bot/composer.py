@@ -227,20 +227,34 @@ async def compose(
     lang = _detect_language_from_facts(facts)
     msg_b = await _build_llm(category, facts, trigger, matches, customer, lang)
 
-    # 6. Select the best
+    # 6. Select the best + log the routing decision
+    trigger_kind = trigger.get("kind", "unknown")
+    merchant_name = facts["merchant"]["name"]
+    template_id = top_template.get("id", "none") if top_template else "none"
+
     if msg_b is None:
-        # LLM failed — use deterministic
         raw = msg_a
+        route = "deterministic"
+        reason = "LLM failed"
     elif top_score < config.BM25_CONFIDENCE_THRESHOLD:
-        # Novel trigger — no good template, LLM is likely better, skip selector
         raw = msg_b
+        route = "llm_compose"
+        reason = f"novel trigger (BM25={top_score:.1f} < {config.BM25_CONFIDENCE_THRESHOLD})"
     else:
-        # Both available — let selector pick
         pick = await _select_best(
             msg_a, msg_b, trigger, category,
-            facts["merchant"]["name"],
+            merchant_name,
         )
         raw = msg_b if pick == "B" else msg_a
+        route = "llm_compose" if pick == "B" else "deterministic"
+        reason = f"selector picked {pick} (BM25={top_score:.1f})"
+
+    logger.info(
+        "[COMPOSE] %s | trigger=%s | merchant=%s | route=%s | reason=%s | template=%s | model=%s | body=%s",
+        trigger_kind, trigger.get("id", ""), merchant_name,
+        route, reason, template_id, config.COMPOSE_MODEL,
+        raw.get("body", "")[:80],
+    )
 
     # 7. Enforce send_as for customer-scoped triggers
     trigger_scope = trigger.get("scope", "merchant")

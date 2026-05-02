@@ -14,7 +14,7 @@ CONTACT_EMAIL = "dakshmalhotra_23ep033@dtu.ac.in"
 APPROACH = "hybrid-bm25-retrieval-plus-llm-composer"
 
 # LLM Provider: "openai" or "gemini"
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai").lower()
 
 # Gemini
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -22,7 +22,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
 
 # OpenAI (fallback / selector)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4-mini")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.4")
 
 # Resolved model names based on provider
 if LLM_PROVIDER == "gemini":
