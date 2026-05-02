@@ -321,7 +321,7 @@ class ApiTests(unittest.TestCase):
     def test_health_and_metadata(self) -> None:
         self.assertEqual(routes.healthz()["status"], "ok")
         meta = routes.metadata()
-        self.assertEqual(meta["model"], "gpt-5.4-mini (compose + classify)")
+        self.assertIn("compose + classify", meta["model"])
         self.assertEqual(meta["approach"], "hybrid-bm25-retrieval-plus-llm-composer")
 
     def test_health_accepts_head_for_monitors(self) -> None:

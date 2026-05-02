@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from vera_bot import config
 from vera_bot.fact_extractor import extract_all_facts
@@ -145,6 +147,11 @@ Message B:
 Which is better? Return JSON: {{"pick": "A" or "B", "reason": "..."}}"""
 
 
+class _Selection(BaseModel):
+    pick: Literal["A", "B"]
+    reason: str
+
+
 async def _select_best(
     msg_a: dict[str, str],
     msg_b: dict[str, str],
@@ -154,44 +161,29 @@ async def _select_best(
 ) -> str:
     """Ask LLM to pick A or B. Returns 'A' or 'B'. Defaults to 'A' on failure."""
     try:
-        from pydantic import BaseModel
-        from typing import Literal
-
-        class Selection(BaseModel):
-            pick: Literal["A", "B"]
-            reason: str
+        from vera_bot.llm_client import _parse
 
         prompt = _build_selector_prompt(
             msg_a["body"], msg_b["body"],
             trigger.get("kind", ""), category.get("slug", ""),
             merchant_name,
         )
-        result = await asyncio.wait_for(
-            _get_client().responses.parse(
-                model=config.CLASSIFY_MODEL,
-                text_format=Selection,
-                input=[
-                    {"role": "system", "content": _SELECTOR_SYSTEM},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_output_tokens=80,
-            ),
+        result = await _parse(
+            model=config.CLASSIFY_MODEL,
+            schema=_Selection,
+            messages=[
+                {"role": "system", "content": _SELECTOR_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=80,
             timeout=config.CLASSIFY_TIMEOUT,
         )
-        parsed = result.output_parsed
-        if parsed:
-            logger.info("Selector picked %s: %s", parsed.pick, parsed.reason)
-            return parsed.pick
+        logger.info("Selector picked %s: %s", result.pick, result.reason)
+        return result.pick
     except Exception:
         logger.warning("Selector failed, defaulting to A (deterministic)", exc_info=True)
     return "A"
-
-
-def _get_client():
-    """Lazy import to avoid circular dependency."""
-    from vera_bot.llm_client import _get_client
-    return _get_client()
 
 
 # ---------------------------------------------------------------------------
