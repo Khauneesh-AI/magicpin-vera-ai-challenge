@@ -172,8 +172,8 @@ class PromptsTests(unittest.TestCase):
                        "cta_type": "open_ended", "send_as": "vera"}, 2.0)]
         prompt = build_compose_user(facts, trigger, templates, mode="compose")
         self.assertIn("Dr. Test", prompt)
-        self.assertIn("Ref msg", prompt)
         self.assertIn("novel_trigger", prompt)
+        self.assertIn("BUSINESS NAME", prompt)  # few-shot guidance present
 
 
 # ---------------------------------------------------------------------------

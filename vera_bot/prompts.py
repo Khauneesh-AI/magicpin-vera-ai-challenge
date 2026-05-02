@@ -123,8 +123,6 @@ def build_compose_system(category: dict[str, Any], detected_language: str = "en"
 
 _FAMILY_PROMPTS: dict[str, str] = {
     "knowledge": """\
-## STRATEGY: Lead with the knowledge item. Cite the source. Keep clinical/peer tone.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 {digest_section}
@@ -133,24 +131,21 @@ Payload: {payload_summary}
 ## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## REFERENCE (different merchant — use ONLY the pattern)
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit — notice: business name, locality, cohort, offer all present)
+"Dr. Meera, JIDA Oct 2026 (p.14) ki report dekhi? Dr. Meera's Dental Clinic, Lajpat Nagar ke liye relevant — 2,100-patient trial: 3-mo fluoride recall cuts caries 38% in high-risk adults. Aapke 124 patients is cohort mein hain. Abstract + Dental Cleaning @ ₹299 ke saath patient WhatsApp draft kar doon? YES/STOP"
 
 ## TASK
-Compose a WhatsApp message that:
-1. Opens with the digest/research item title and source citation
-2. Connects it to THIS merchant's patient cohort or business context
-3. Offers to do something concrete (pull abstract, draft patient WhatsApp, SOP checklist)
-4. Levers: specificity (trial_n, source page) + curiosity ("worth a look") + effort externalization ("I'll pull it")
-5. send_as = "{send_as}"
+Write a knowledge/research message. You MUST include:
+- Merchant BUSINESS NAME (not just owner name) + LOCALITY in the first 2 sentences
+- The digest/research citation with source + key number
+- Connection to THIS merchant's specific cohort/situation
+- An offer from their active offers woven into the CTA
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "performance": """\
-## STRATEGY: Lead with the metric change. Show the number. Propose one recovery/amplification action.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -158,25 +153,20 @@ Payload: {payload_summary}
 ## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## REFERENCE
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit)
+"Dr. Bharat, Bharat Dental Care (Andheri West) ke calls last 7d mein -50% hain vs baseline 12. CTR 1.8%, Andheri peers 3.0% pe hain. Main aaj Dental Cleaning @ ₹299 ka fresh Google post draft kar deta hoon — 2 min ka kaam hai. YES?"
 
 ## TASK
-Compose a WhatsApp message that:
-1. Opens with the specific metric and delta ("calls down 50%", "views up +15%")
-2. Compares to peer benchmark if available
-3. Names the likely driver if in payload
-4. Proposes ONE concrete action (refresh post, boost offer, double down)
-5. Levers: loss aversion (for dips) or momentum (for spikes) + specificity + effort externalization
-6. send_as = "{send_as}"
+Write a performance message. You MUST include:
+- BUSINESS NAME + LOCALITY in the opening
+- Exact metric delta + peer comparison
+- Their active offer by exact title in the proposed action
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "account": """\
-## STRATEGY: Frame the account state as a risk or opportunity. Propose one low-effort next step.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -184,24 +174,20 @@ Payload: {payload_summary}
 ## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## REFERENCE
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit)
+"Anjali, Glamour Lounge Spa & Salon (Aundh, Pune) ka Pro plan 38 din se expired hai. Tabse calls -30%, aur 24 customers lapsed. Aapka Haircut @ ₹99 + FREE head massage abhi strongest offer hai — ek 7-day Aundh comeback post draft kar doon? YES/STOP"
 
 ## TASK
-Compose a WhatsApp message that:
-1. States the account situation clearly (days since expiry, days to renewal, unverified profile)
-2. Quantifies the impact (lost views, lapsed customers, missed leads)
-3. Proposes ONE simple next step ("want the 2-line recovery post?", "want the postcard steps?")
-4. Levers: loss aversion + specificity + effort externalization
-5. send_as = "{send_as}"
+Write an account-state message. You MUST include:
+- BUSINESS NAME + LOCALITY
+- Quantified impact (days, lapsed count, metric drop)
+- Active offer woven into the recovery action
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "event": """\
-## STRATEGY: Connect the timing/event to a concrete merchant action. Create urgency.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -209,25 +195,21 @@ Payload: {payload_summary}
 ## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## REFERENCE
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit)
+"Suresh, aaj DC vs MI 7:30 PM Arun Jaitley Stadium. SK Pizza Junction (Sant Nagar, Delhi) ke liye perfect window — weekend match pe home-delivery orders +40% hote hain. Buy 1 Pizza Get 1 Free ka banner aaj raat ke liye draft kar doon? YES/STOP"
 
 ## TASK
-Compose a WhatsApp message that:
-1. Names the event/season/timing explicitly (festival, match, heatwave, construction)
-2. Connects it to demand shift or merchant opportunity
-3. Proposes ONE action using the merchant's existing offer or service
-4. Creates urgency ("before the window closes", "tonight", "next 2 weeks")
-5. Levers: loss aversion + specificity + effort externalization
-6. send_as = "{send_as}"
+Write an event/timing message. You MUST include:
+- BUSINESS NAME + LOCALITY
+- The specific event/timing with date/time
+- Their active offer connected to the opportunity
+- Urgency ("aaj", "next 2 weeks", "before window closes")
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "social": """\
-## STRATEGY: Use social proof, reviews, or competitive intelligence. Ask the merchant for input.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -235,24 +217,21 @@ Payload: {payload_summary}
 ## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## REFERENCE
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit)
+"Lakshmi, Studio11 Family Salon (Kapra, Hyderabad) ke 12 reviews mein stylist skill mention hua — aapki strongest demand yahi hai. Main ek Google post + WhatsApp reply template draft kar doon, Haircut @ ₹99 ke saath? Reply with service name jo aap push karna chahti ho."
 
 ## TASK
-Compose a WhatsApp message that:
-1. Leads with the social signal (review count, review theme, competitor move, trend data)
-2. Asks the merchant a specific question OR proposes positioning
-3. Offers to convert their input into something useful (Google post, WhatsApp reply template)
-4. Levers: social proof + curiosity ("want to see who?") + asking the merchant
-5. send_as = "{send_as}"
+Write a social proof/review/competitor message. You MUST include:
+- BUSINESS NAME + LOCALITY
+- The specific social signal (review count, theme, competitor name+distance)
+- Active offer in the proposed action
+- Ask the merchant a question OR propose positioning
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "customer": """\
-## STRATEGY: Speak AS the merchant TO their customer. Formal, precise, service-focused.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -263,26 +242,21 @@ Payload: {payload_summary}
 ## CUSTOMER CONTEXT
 {customer_section}
 
-## REFERENCE
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit — note: message is FROM merchant TO customer)
+"Hi Priya, Dr. Meera's Dental Clinic (Lajpat Nagar) here 🦷 Aapki 6-month cleaning recall due hai. Wed 6 Nov 6pm ya Thu 7 Nov 5pm — Dental Cleaning @ ₹299 + complimentary fluoride. Reply 1 for Wed, 2 for Thu, ya apna time batao."
 
 ## TASK
-Compose a WhatsApp message FROM the merchant TO the customer:
-1. Greet with customer name and merchant business name ("[Merchant] here")
-2. State the specific reason (recall due, appointment tomorrow, refill due, birthday)
-3. Include concrete details (service, slot times, price, date)
-4. End with a single low-friction CTA (Reply YES / share a time)
-5. Do NOT use clinical overclaims. Do NOT be promotional.
-6. Match customer language preference if available.
-7. send_as = "merchant_on_behalf" (ALWAYS for customer messages)
+Write a message FROM the merchant's business TO their customer:
+- Greet with customer name + BUSINESS NAME + LOCALITY
+- State the specific reason with concrete details (service, date, slot, price)
+- Use their active offer by exact title
+- Match customer language preference
+- send_as = "merchant_on_behalf" (ALWAYS)
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 
     "fallback": """\
-## STRATEGY: Novel trigger — compose from first principles using whatever context is available.
-
 ## TRIGGER
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
@@ -293,18 +267,16 @@ Payload: {payload_summary}
 ## CUSTOMER CONTEXT
 {customer_section}
 
-## REFERENCE (may be from a different trigger kind — use ONLY the structural pattern)
-{template_message}
-{template_warning}
+## FEW-SHOT EXAMPLE (9/10 merchant_fit — for a novel trigger)
+"Ramesh, Apollo Health Plus Pharmacy (Malviya Nagar, Jaipur) ke liye summer alert: ORS demand +40%, sunscreen +38%. Aapka 68% repeat base ready hai — ORS + sunscreen basket ka WhatsApp note ₹499+ home delivery ke saath draft kar doon? YES/STOP"
 
 ## TASK
-Compose a WhatsApp message that:
-1. Leads with the trigger's "why now" — extract the key fact from the payload
-2. Connects it to this merchant's specific context (their offers, performance, location)
-3. Proposes ONE concrete action
-4. Layers 2-3 compulsion levers
-5. Ends with a single CTA
-6. send_as = "{send_as}"
+Write a message for this novel trigger. You MUST include:
+- BUSINESS NAME + LOCALITY
+- The trigger's specific "why now" fact
+- Active offer or service woven into the action
+- 2-3 compulsion levers
+- send_as = "{send_as}"
 
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
