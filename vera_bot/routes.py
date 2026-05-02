@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Response
 
 from vera_bot import __version__, config
-from vera_bot.composer import compose
+from vera_bot.composer import compose_async
 from vera_bot.reply_handler import handle_reply, is_auto_reply_keyword
 from vera_bot.schemas import ContextBody, ReplyBody, TickBody
 from vera_bot.store import Store
@@ -128,7 +128,7 @@ async def tick(body: TickBody) -> dict[str, Any]:
 
     # Fire all LLM compositions in parallel
     results = await asyncio.gather(
-        *[compose(cat, mer, trg, cust) for cat, mer, trg, cust in pending],
+        *[compose_async(cat, mer, trg, cust) for cat, mer, trg, cust in pending],
         return_exceptions=True,
     )
 
