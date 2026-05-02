@@ -130,7 +130,7 @@ Kind: {trigger_kind} | Urgency: {urgency}
 {digest_section}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
 ## REFERENCE (different merchant — use ONLY the pattern)
@@ -155,7 +155,7 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
 ## REFERENCE
@@ -181,7 +181,7 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
 ## REFERENCE
@@ -206,7 +206,7 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
 ## REFERENCE
@@ -232,7 +232,7 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
 ## REFERENCE
@@ -257,10 +257,10 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## CUSTOMER
+## CUSTOMER CONTEXT
 {customer_section}
 
 ## REFERENCE
@@ -287,10 +287,10 @@ Return JSON: body, cta, send_as, suppression_key, rationale\
 Kind: {trigger_kind} | Urgency: {urgency}
 Payload: {payload_summary}
 
-## MERCHANT
+## WHO YOU ARE TALKING TO
 {merchant_facts}
 
-## CUSTOMER
+## CUSTOMER CONTEXT
 {customer_section}
 
 ## REFERENCE (may be from a different trigger kind — use ONLY the structural pattern)
@@ -309,6 +309,133 @@ Compose a WhatsApp message that:
 Return JSON: body, cta, send_as, suppression_key, rationale\
 """,
 }
+
+
+def _build_merchant_brief(facts: dict[str, Any]) -> str:
+    """Convert structured merchant facts into a readable narrative brief."""
+    m = facts.get("merchant", {})
+    name = m.get("name", "Merchant")
+    full_name = m.get("full_name", name)
+    location = m.get("location", "")
+    langs = m.get("languages", [])
+    lang_str = "Hindi-English mix" if "hi" in langs else "English"
+
+    perf = m.get("performance", {})
+    peer = m.get("peer_comparison", {})
+    offers = m.get("active_offers", [])
+    best_offer = m.get("best_offer", "")
+    signals = m.get("signals", [])
+    review = m.get("review_theme", {})
+    agg = m.get("customer_aggregate", {})
+    sub = m.get("subscription", {})
+
+    lines = [f"You are messaging {name}, who runs {full_name}"]
+    if location:
+        lines[0] += f" in {location}"
+    lines[0] += f". Language: {lang_str}."
+
+    # Performance line
+    perf_parts = []
+    if perf.get("views"):
+        perf_parts.append(f"{perf['views']} views")
+    if perf.get("calls"):
+        perf_parts.append(f"{perf['calls']} calls/month")
+    if perf.get("ctr"):
+        perf_parts.append(f"CTR {perf['ctr']}")
+    if perf_parts:
+        perf_line = ", ".join(perf_parts)
+        if peer.get("ctr_vs_peer") == "below" and peer.get("peer_ctr"):
+            perf_line += f" (below peer average of {peer['peer_ctr']})"
+        elif peer.get("ctr_vs_peer") == "above" and peer.get("peer_ctr"):
+            perf_line += f" (above peer average of {peer['peer_ctr']})"
+        lines.append(f"Performance: {perf_line}.")
+
+    # Delta
+    delta = perf.get("delta_7d", {})
+    delta_parts = []
+    for key, val in delta.items():
+        if val:
+            metric = key.replace("_pct", "")
+            delta_parts.append(f"{metric} {val}")
+    if delta_parts:
+        lines.append(f"7-day change: {', '.join(delta_parts)}.")
+
+    # Offers
+    if offers:
+        lines.append(f"Active offers: {', '.join(offers[:3])}.")
+
+    # Subscription
+    if sub.get("status") and sub.get("days_remaining") is not None:
+        lines.append(f"Subscription: {sub.get('plan', 'Pro')} plan, {sub.get('status')}, {sub['days_remaining']} days remaining.")
+
+    # Customer aggregate
+    agg_parts = []
+    if agg.get("total_unique_ytd"):
+        agg_parts.append(f"{agg['total_unique_ytd']} unique customers YTD")
+    if agg.get("lapsed_180d_plus"):
+        agg_parts.append(f"{agg['lapsed_180d_plus']} lapsed 180d+")
+    if agg.get("high_risk_adult_count"):
+        agg_parts.append(f"{agg['high_risk_adult_count']} high-risk adult patients")
+    if agg.get("repeat_customer_pct"):
+        agg_parts.append(f"{agg['repeat_customer_pct']} repeat rate")
+    if agg_parts:
+        lines.append(f"Customers: {', '.join(agg_parts)}.")
+
+    # Signals
+    if signals:
+        lines.append(f"Signals: {', '.join(str(s) for s in signals[:4])}.")
+
+    # Review theme
+    if review.get("theme"):
+        occ = review.get("occurrences", "")
+        lines.append(f"Review theme: {review['theme']}" + (f" ({occ} mentions)" if occ else "") + ".")
+
+    # Verified
+    if m.get("verified") is False:
+        lines.append("Google profile is NOT verified.")
+
+    return "\n".join(lines)
+
+
+def _build_trigger_brief(trigger_facts: dict[str, Any]) -> str:
+    """Convert trigger payload into a readable brief."""
+    payload = trigger_facts.get("payload", {})
+    if not payload:
+        return "No additional payload details."
+
+    lines = []
+    for key, val in payload.items():
+        if val is not None and val != "" and val != []:
+            label = key.replace("_", " ")
+            if isinstance(val, list):
+                val = ", ".join(str(v) for v in val[:5])
+            elif isinstance(val, dict):
+                val = ", ".join(f"{k}: {v}" for k, v in val.items() if v)
+            lines.append(f"- {label}: {val}")
+    return "\n".join(lines) if lines else "No additional payload details."
+
+
+def _build_customer_brief(customer: dict[str, Any]) -> str:
+    """Convert customer facts into a readable brief."""
+    name = customer.get("name", "Customer")
+    state = customer.get("state", "")
+    lang = customer.get("language_pref", "")
+    rel = customer.get("relationship", {})
+    prefs = customer.get("preferences", {})
+
+    lines = [f"Customer: {name}"]
+    if state:
+        lines[0] += f" (state: {state})"
+    if lang:
+        lines.append(f"Language preference: {lang}.")
+    if rel.get("last_visit"):
+        lines.append(f"Last visit: {rel['last_visit']}, {rel.get('visits_total', '?')} total visits.")
+    if rel.get("services_received"):
+        services = rel["services_received"]
+        lines.append(f"Services: {', '.join(str(s) for s in services[-3:])}.")
+    if prefs.get("preferred_slots"):
+        lines.append(f"Preferred time: {prefs['preferred_slots']}.")
+    return "\n".join(lines)
 
 
 def build_compose_user(
@@ -352,8 +479,8 @@ def build_compose_user(
         )
 
     # --- COMPOSE mode (per-family prompt) ---
-    merchant_facts = json.dumps(facts["merchant"], indent=2, ensure_ascii=False, default=str)
-    payload_summary = json.dumps(trigger_facts.get("payload", {}), indent=2, ensure_ascii=False, default=str)
+    merchant_facts = _build_merchant_brief(facts)
+    payload_summary = _build_trigger_brief(trigger_facts)
 
     # Template reference + mismatch warning
     template_message = ""
@@ -378,7 +505,7 @@ def build_compose_user(
             )
 
     if facts.get("customer"):
-        customer_section = json.dumps(facts["customer"], indent=2, ensure_ascii=False, default=str)
+        customer_section = _build_customer_brief(facts["customer"])
     else:
         customer_section = "Not applicable — merchant-facing message."
 
