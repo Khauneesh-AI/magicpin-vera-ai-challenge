@@ -73,12 +73,14 @@ BOT_URL=http://localhost:8080 LLM_MODEL=gpt-5.4 TEST_SCENARIO=full_evaluation py
 
 | Dimension | Score |
 |---|---|
-| Avg Specificity | 7/10 |
-| Avg Category Fit | 8/10 |
+| Avg Specificity | 8/10 |
+| Avg Category Fit | 7/10 |
 | Avg Merchant Fit | 7/10 |
 | Avg Decision Quality | 8/10 |
 | Avg Engagement | 7/10 |
-| **Average** | **38.7/50 (77%)** |
+| **Average** | **37/50 (74%)** |
+| Score range | 32-44/50 |
+| Top scorers | 44 (corporate thali), 42 (perf_dip, seasonal, supply_alert) |
 
 | Scenario | Result |
 |---|---|
@@ -87,14 +89,25 @@ BOT_URL=http://localhost:8080 LLM_MODEL=gpt-5.4 TEST_SCENARIO=full_evaluation py
 | Intent transition ("Ok lets do it") | PASS — switched to action mode |
 | Hostile handling ("Stop messaging me") | PASS — ended immediately |
 
+### Where the real advantage shows (A/B controlled eval)
+
+The judge simulator only tests 25 known triggers. Our A/B eval (`tools/evaluate_ab.py`) also tests 8 novel Phase 3 triggers — weather, local events, trend movements — that a pure deterministic bot can't handle:
+
+| Scenario | v1 Deterministic | v2 Hybrid | Delta |
+|---|---|---|---|
+| Known triggers (12) | 33.5 | 37.9 | **+4.4** |
+| Novel triggers (8) | 23.9 | 39.8 | **+15.9** |
+| **Overall (20)** | **30.2** | **40.6** | **+10.4, 16W/0L** |
+
 ### Models Used
 
 | Role | Model |
 |---|---|
-| Bot (compose + classify + select) | gpt-5.4-mini |
+| Bot (compose + classify + select) | gpt-5.4 (configurable via OPENAI_MODEL env) |
 | Judge (simulator) | gpt-5.4 |
+| Alternate: Gemini | gemini-3-flash-preview (set LLM_PROVIDER=gemini) |
 
-For detailed comparative analysis (v1 deterministic vs v2 hybrid, A/B controlled evaluation, architecture iteration history), see [docs/evaluation-analysis.md](docs/evaluation-analysis.md).
+For detailed comparative analysis and architecture iteration history, see [docs/evaluation-analysis.md](docs/evaluation-analysis.md).
 
 ## Tech Stack
 
