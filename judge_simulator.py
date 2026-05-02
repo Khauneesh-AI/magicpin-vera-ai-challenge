@@ -173,11 +173,12 @@ class OpenAIProvider(LLMProvider):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
 
+        token_key = "max_completion_tokens" if "gpt-5" in self.model or "gpt-4.1" in self.model else "max_tokens"
         body = json.dumps({
             "model": self.model,
             "messages": messages,
             "temperature": 0.2,
-            "max_tokens": 1500
+            token_key: 1500
         }).encode("utf-8")
 
         req = urlrequest.Request(
